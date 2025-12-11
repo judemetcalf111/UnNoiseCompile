@@ -67,4 +67,4 @@ def fast_interaction_multiply(vector, n, a0_vals, a1_vals):
 		# 4. Flatten back to 1D for the next iteration
 		v = v_transformed.flatten()
 	
-	return v
+	return v.tolist()
