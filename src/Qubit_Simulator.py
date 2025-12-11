@@ -81,8 +81,8 @@ def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots =
 		epsilon10 = np.zeros(num_qubits)
 
 		for qub_ind,qub in enumerate(qubit_props):
-			e01 = 1 - qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice the "1 -" here to turn fidelity into error rate
-			e10 = 1 - qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice the "1 -" here to turn fidelity into error rate 
+			e01 = qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+			e10 = qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
 			epsilon01[qub_ind] = e01
 			epsilon10[qub_ind] = e10
 		
