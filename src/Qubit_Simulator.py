@@ -1,11 +1,28 @@
-from qiskit import QuantumCircuit, transpile
-import matplotlib.pyplot as plt
-from qiskit_aer import AerSimulator
 import numpy as np
-from BitFlipper import add_BitFlips
+import matplotlib.pyplot as plt
 import random
+import json
+from qiskit import QuantumCircuit, transpile
+from qiskit_aer import AerSimulator
+from MeasureMatrix import fast_interaction_multiply
+from BitFlipper import add_BitFlips
 
-def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots = 1024, simulator = AerSimulator(), circ_seed = 312, sim_seed = 254):    
+def pad_counts(counts, num_qubits):
+    # Generate all bitstrings
+    all_bitstrings = [
+        format(i, f'0{num_qubits}b') 
+        for i in range(2**num_qubits)
+    ]
+    
+    # Create a new dict with 0 counts for all bitstrings
+    full_counts = {b: 0 for b in all_bitstrings}
+    
+    # Update 
+    full_counts.update(counts)
+    return full_counts
+
+
+def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots = 1024, simulator = AerSimulator(), circ_seed = 312, sim_seed = 254, measure_error = False, datafile = None):    
 	# Create GHZ circuit
 	
 	qc = QuantumCircuit(num_qubits)
@@ -27,10 +44,13 @@ def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots =
 	counts = result.get_counts()
 	noisy_counts = noisy_result.get_counts()
 
-	all_keys = set(counts.keys()) | set(noisy_counts.keys())
+	counts = pad_counts(counts, num_qubits)
+	noisy_counts = pad_counts(noisy_counts, num_qubits)
+
+	all_keys_list = [format(i, f'0{num_qubits}b') for i in range(2**num_qubits)]
 	
 	# Sort keys to ensure the X-axis is in binary order (00000 -> 11111)
-	sorted_keys = sorted(list(all_keys))
+	sorted_keys = sorted(all_keys_list)
 	
 	# Create lists of values aligned to the sorted keys
 	# .get(key, 0) ensures we put a 0 if that bitstring didn't occur in a specific circuit
@@ -40,7 +60,40 @@ def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots =
 	# 3. Plotting
 	x = np.arange(len(sorted_keys))  # The label locations
 	width = 0.35  # The width of the bars
-	
+
+	digit_sums = [0] * num_qubits
+
+	if (measure_error == True) and (datafile is None):
+		# Default error rates if no datafile is provided
+		epsilon01 = np.random.uniform(0., .02, num_qubits).tolist()
+		epsilon10 = np.random.uniform(0., .02, num_qubits).tolist()
+		
+		noisy_values = fast_interaction_multiply(noisy_values, num_qubits, epsilon01, epsilon10)
+
+	elif (measure_error == True) and (datafile is not None):
+		with open("../data/" + str(datafile) + ".json", 'r') as file:
+			data = json.load(file)
+		qubit_props = data['oneQubitProperties']
+		num_qubits_in_data = len(qubit_props)
+		if num_qubits_in_data != num_qubits:
+			raise Exception("Warning: Number of qubits in datafile does not match simulation setting!\nDatafile qubits: " + str(num_qubits_in_data) + "\nSimulation qubits: " + str(num_qubits))
+		epsilon01 = np.zeros(num_qubits)
+		epsilon10 = np.zeros(num_qubits)
+
+		for qub_ind,qub in enumerate(qubit_props):
+			e01 = 1 - qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice the "1 -" here to turn fidelity into error rate
+			e10 = 1 - qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice the "1 -" here to turn fidelity into error rate 
+			epsilon01[qub_ind] = e01
+			epsilon10[qub_ind] = e10
+		
+		noisy_values = fast_interaction_multiply(noisy_values, num_qubits, epsilon01, epsilon10)
+
+	for b_str, count in zip(sorted_keys, noisy_values):
+		for i, bit in enumerate(b_str):
+			if bit == '1':
+				digit_sums[i] += count / (shots)
+
+
 	fig, ax = plt.subplots(figsize=(14, 6)) # Wide figure to fit labels
 	
 	# Plot the two sets of bars, offset by +/- width/2
@@ -58,16 +111,9 @@ def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots =
 	ax.grid(axis='y', linestyle='--', alpha=0.7)
 	
 	plt.tight_layout()
-	plt.show()
-
-	digit_sums = [0] * num_qubits
-
-	for b_str, count in zip(sorted_keys, values):
-	    for i, bit in enumerate(b_str):
-	        if bit == '1':
-	            digit_sums[i] += count / (shots * num_qubits)
 	
 	# Output the results
+	plt.show()
 	return digit_sums
 
 
