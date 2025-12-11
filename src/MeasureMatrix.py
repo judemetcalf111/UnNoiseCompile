@@ -28,23 +28,6 @@ def create_kron_matrix(n, a0_vals, a1_vals):
     
     return full_matrix
 
-# --- Example Usage ---
-
-n = 3
-a0 = np.array([0.1, 0.2, 0.3])
-a1 = np.array([0.5, 0.6, 0.7])
-
-result = create_kron_matrix(n, a0, a1)
-
-print(f"Shape: {result.shape}")
-print("Top-left 4x4 block:")
-print(np.round(result[:4, :4], 3))
-
-# Verification of M[1,0] (from 000 to 001)
-# 0->0 (1-0.1), 0->0 (1-0.2), 0->1 (0.3)
-# 0.9 * 0.8 * 0.3 = 0.216
-print(f"\nValue at [1,0]: {result[1,0]:.4f}")
-
 def fast_interaction_multiply(vector, n, a0_vals, a1_vals):
 	"""
 	Computes (M . vector) without creating the matrix M.
