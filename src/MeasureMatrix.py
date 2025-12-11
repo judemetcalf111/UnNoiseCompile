@@ -68,36 +68,3 @@ def fast_interaction_multiply(vector, n, a0_vals, a1_vals):
 		v = v_transformed.flatten()
 	
 	return v
-
-# --- Verification ---
-
-# Setup parameters (Same as previous example)
-n = 10  # Let's try a larger n where full matrix is 1024x1024
-counts = np.random.randint(1, 100, 2**n) # Random initial vector
-
-a0 = np.random.rand(n)
-a1 = np.random.rand(n)
-
-# 1. Fast Method
-result_fast = fast_interaction_multiply(counts, n, a0, a1)
-
-# 2. Slow Method (Verification using Kronecker)
-# Only feasible for small n, doing n=10 is okay (1M entries)
-# but don't try this for n=20!
-from functools import reduce
-matrices = []
-for k in range(n):
-    c0 = [1 - a0[k], a0[k]]
-    c1 = [a1[k],     1 - a1[k]]
-    matrices.append(np.array([c0, c1]).T)
-full_matrix = reduce(np.kron, matrices)
-
-result_slow = full_matrix @ counts
-
-print(f"Vector Size: {2**n}")
-print(f"Fast Result (First 5): {np.round(result_fast[:5], 2)}")
-print(f"Slow Result (First 5): {np.round(result_slow[:5], 2)}")
-
-# Check if they are identical
-is_close = np.allclose(result_fast, result_slow)
-print(f"\nDo results match? {is_close}")
