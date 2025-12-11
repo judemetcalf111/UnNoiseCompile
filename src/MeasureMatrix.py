@@ -1,6 +1,7 @@
 import numpy as np
 from functools import reduce
 
+
 def create_kron_matrix(n, a0_vals, a1_vals):
     """
     Constructs the transition matrix using Kronecker products.
