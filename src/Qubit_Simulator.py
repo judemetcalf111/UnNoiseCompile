@@ -22,7 +22,7 @@ def pad_counts(counts, num_qubits):
     return full_counts
 
 
-def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots = 1024, simulator = AerSimulator(), circ_seed = 312, sim_seed = 254, measure_error = False, datafile = None):    
+def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots = 1024, simulator = AerSimulator(), circ_seed = 312, sim_seed = 254, measure_error = False, datafile = None, plotting = True):    
 	# Create GHZ circuit
 	
 	qc = QuantumCircuit(num_qubits)
@@ -93,27 +93,26 @@ def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots =
 			if bit == '1':
 				digit_sums[i] += count / (shots)
 
-
-	fig, ax = plt.subplots(figsize=(14, 6)) # Wide figure to fit labels
-	
-	# Plot the two sets of bars, offset by +/- width/2
-	rects1 = ax.bar(x - width/2, values, width, label='Circuit', color='#648FFF')
-	rects2 = ax.bar(x + width/2, noisy_values, width, label='Noisy Circuit', color='#DC267F')
-	
-	# 4. Formatting
-	ax.set_ylabel('Counts')
-	ax.set_title('Quantum Circuit Output Comparison')
-	ax.set_xticks(x)
-	ax.set_xticklabels(sorted_keys, rotation=90) # Rotate labels for readability
-	ax.legend()
-	
-	# Optional: Add grid for easier reading of height
-	ax.grid(axis='y', linestyle='--', alpha=0.7)
-	
-	plt.tight_layout()
-	
+	if plotting == True:
+		fig, ax = plt.subplots(figsize=(14, 6)) # Wide figure to fit labels
+		
+		# Plot the two sets of bars, offset by +/- width/2
+		rects1 = ax.bar(x - width/2, values, width, label='Circuit', color='#648FFF')
+		rects2 = ax.bar(x + width/2, noisy_values, width, label='Noisy Circuit', color='#DC267F')
+		
+		# 4. Formatting
+		ax.set_ylabel('Counts')
+		ax.set_title('Quantum Circuit Output Comparison')
+		ax.set_xticks(x)
+		ax.set_xticklabels(sorted_keys, rotation=90) # Rotate labels for readability
+		ax.legend()
+		
+		# Optional: Add grid for easier reading of height
+		ax.grid(axis='y', linestyle='--', alpha=0.7)
+		
+		plt.tight_layout()
+		plt.show()
 	# Output the results
-	plt.show()
 	return digit_sums
 
 
