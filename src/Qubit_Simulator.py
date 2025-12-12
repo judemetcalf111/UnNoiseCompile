@@ -22,7 +22,7 @@ def pad_counts(counts, num_qubits):
     return full_counts
 
 
-def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots = 1024, simulator = AerSimulator(), circ_seed = 312, sim_seed = 254, measure_error = False, datafile = None, plotting = True):    
+def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots = 1024, simulator = AerSimulator(), circ_seed = 312, sim_seed = 254, measure_error = False, datafile = None, data = None, plotting = True):    
 	# Create GHZ circuit
 	
 	qc = QuantumCircuit(num_qubits)
@@ -70,22 +70,33 @@ def Hadamard_Simulator(num_qubits = 5, native_gates = ['r', 'rz', 'cz'], shots =
 		
 		noisy_values = fast_interaction_multiply(noisy_values, num_qubits, epsilon01, epsilon10)
 
-	elif (measure_error == True) and (datafile is not None):
-		with open("../data/" + str(datafile) + ".json", 'r') as file:
-			data = json.load(file)
-		qubit_props = data['oneQubitProperties']
-		num_qubits_in_data = len(qubit_props)
-		if num_qubits_in_data != num_qubits:
-			raise Exception("Warning: Number of qubits in datafile does not match simulation setting!\nDatafile qubits: " + str(num_qubits_in_data) + "\nSimulation qubits: " + str(num_qubits))
-		epsilon01 = np.zeros(num_qubits)
-		epsilon10 = np.zeros(num_qubits)
+	elif (measure_error == True):
+		if datafile.endswith('.json'):
+			with open("../data/" + str(datafile), 'r') as file:
+				data = json.load(file)
+			qubit_props = data['oneQubitProperties']
+			num_qubits_in_data = len(qubit_props)
+			if num_qubits_in_data != num_qubits:
+				raise Exception("Warning: Number of qubits in datafile does not match simulation setting!\nDatafile qubits: "
+						+ str(num_qubits_in_data) + "\nSimulation qubits: " + str(num_qubits))
+			epsilon01 = np.zeros(num_qubits)
+			epsilon10 = np.zeros(num_qubits)
 
-		for qub_ind,qub in enumerate(qubit_props):
-			e01 = qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
-			e10 = qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
-			epsilon01[qub_ind] = e01
-			epsilon10[qub_ind] = e10
-		
+			for qub_ind,qub in enumerate(qubit_props):
+				e01 = qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+				e10 = qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+				epsilon01[qub_ind] = e01
+				epsilon10[qub_ind] = e10
+			
+		elif type(data) == np.ndarray:
+			if data.shape[0] != num_qubits or data.shape[1] != 2:
+				raise Exception("Warning: Data array shape does not match simulation setting!\nData shape: "
+						+ str(data.shape) + "\nSimulation qubits: " + str(num_qubits))
+			epsilon01 = data[:,0].tolist()
+			epsilon10 = data[:,1].tolist()
+		elif datafile is None and data is None:
+			raise Exception("Error: No data or datafile provided for error measurement!")
+
 		noisy_values = fast_interaction_multiply(noisy_values, num_qubits, epsilon01, epsilon10)
 
 	for b_str, count in zip(sorted_keys, noisy_values):
