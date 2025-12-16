@@ -1,4 +1,8 @@
+# Create path to src directory
+# use specified path if running on e.g. a HPC system 
 import sys
+sys.path.insert(1, '../src')
+
 import numpy as np
 from Qubit_Simulator import Hadamard_Simulator
 
