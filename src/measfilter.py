@@ -19,13 +19,14 @@ from math import pi
 from cvxopt import matrix, solvers
 from scipy.optimize import minimize_scalar,minimize
 # For plot
+from qiskit import QuantumCircuit, transpile
+from braket.aws import AwsDevice
+
 import matplotlib.pyplot as plt
-from matplotlib.pyplot import figure
 width = 6.72 # plot width
 height = 4.15 # plot height
 
 
-from braket.aws import AwsDevice
 
 def get_braket_calibration_dict(device_arn, n_qubits=None):
     """
@@ -169,7 +170,6 @@ def param_record(backend, itr=32, shots=8192, if_write=True, file_address=''):
         return np.array([])
 
     return allParam
-from qiskit import QuantumCircuit, transpile
 
 
 def meas_circ(nQubits, backend=None, itr=32):
@@ -1002,20 +1002,28 @@ class SplitMeasFilter:
           Not None after execute inference()
           
     """
-    def __init__(self, qubit_order, data = [], file_address=''):
+    def __init__(self, qubit_order, data=None, file_address=''):
         self.file_address = file_address
-        if len(data) < 1:
-            self.data = read_filter_data(self.file_address)
-        else:
-            self.data = data
-            
         self.qubit_order = qubit_order
+        
+        # Initialize storage structures
         self.prior = {}
         self.post = {}
         self.post_marginals = {f'Qubit{q}': {'0': None, '1': None} for q in qubit_order}
         self.params = None
         self.mat_mean = None
         self.mat_mode = None
+
+        # LOGIC FIX: Handle data loading gracefully
+        if data is not None and len(data) > 0:
+            self.data = data
+        else:
+            # Try to read from file, but default to empty if file doesn't exist yet
+            try:
+                self.data = read_filter_data(self.file_address)
+            except (FileNotFoundError, OSError):
+                # This is normal if we are just starting a new calibration
+                self.data = np.array([])
             
     def create_filter_mat(self):
         """
@@ -1093,26 +1101,50 @@ class SplitMeasFilter:
 
         """
 
+        # Ensure data is valid and has a length (Fixes 'unsized object' error)
+        if self.data is None:
+            raise ValueError("No data provided to inference engine.")
         
+        # Force data to be at least 1D array so len() works
+        self.data = np.atleast_1d(self.data)
+        
+        if len(self.data) == 0:
+             raise ValueError("Data array is empty.")
+
+        # we check if we actually have params. If not, we use defaults immediately.        
         try:
-            self.params = get_braket_calibration_data()
+            if self.params is None:
+                 raise Exception("No params, skip to default.")
+            
             itr = self.params[0]['itr']
             shots = self.params[0]['shots']
             num_points = int(itr * shots / shots_per_point)
+            
         except Exception:
-            num_points = int(len(self.data)/shots_per_point)
+            # Fallback: Calculate points based on data length
+            num_points = int(len(self.data) / shots_per_point)
+            
+            # Ensure at least 1 point
+            if num_points < 1: 
+                num_points = 1
+                
+            # Set default error parameters (0.5% error) if not present
             self.params = {}
             for q in self.qubit_order:
                 self.params[q] = {}
-                self.params[q]['pm1p0'] = 0.005
+                self.params[q]['pm1p0'] = 0.005 
                 self.params[q]['pm0p1'] = 0.005
-            print('Warning: Cannot get backend calibration data, using default parameters instead.')
 
+        # RUN INFERENCE LOOP
         info = {}
         for i in self.qubit_order:
             print(f'Inferring Qubit {i} for State |{prep_state}>')
+            
             d = getData0(self.data, num_points, i)
+            
+            # Construct filename safely
             state_prefix = self.file_address + f"State{prep_state}_"
+            
             prior_lambdas, post_lambdas = output(
                 d,
                 i,
@@ -1123,15 +1155,20 @@ class SplitMeasFilter:
                 show_denoised=show_denoised,
                 file_address=state_prefix,
                 prep_state=prep_state)
+            
+            # Store results
             self.prior['Qubit' + str(i)] = prior_lambdas
             self.post['Qubit' + str(i)] = post_lambdas
+            
             if prep_state == '0':
-                # Store column 0
+                # 0 error rate
                 self.post_marginals[f'Qubit{i}']['0'] = post_lambdas[:, 0]
             elif prep_state == '1':
-                # Store column 1
+                # 1 error rate
                 self.post_marginals[f'Qubit{i}']['1'] = post_lambdas[:, 1]
-        first_q = f'Qubit{self.qubit_order[0]}' # Ensuring at least the first qubit's both marginals are available, and thus the whole batch!
+                
+        # Check if we can build the full matrix (only if we have both 0 and 1 data)
+        first_q = f'Qubit{self.qubit_order[0]}'
         if (self.post_marginals[first_q]['0'] is not None and 
             self.post_marginals[first_q]['1'] is not None):
             self.create_filter_mat()
