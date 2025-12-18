@@ -24,7 +24,7 @@ from matplotlib.pyplot import figure
 width = 6.72 # plot width
 height = 4.15 # plot height
 
-import boto3
+
 from braket.aws import AwsDevice
 
 def get_braket_calibration_dict(device_arn, n_qubits=None):
@@ -169,35 +169,52 @@ def param_record(backend, itr=32, shots=8192, if_write=True, file_address=''):
         return np.array([])
 
     return allParam
+from qiskit import QuantumCircuit, transpile
 
-def meas_circ(nQubits, backend, itr=32):
-    """Generate circuit for inferring measurement error.
-        Note that for compatibility with native Superconducting
-        gates, the hadamard gates are replaced by 1/2 Y rotation gates,
-        which have equivalent measurements, and are both robust
-        to gate bit-flip errors.
-    Args:
-      nQubits: int
-        Number of qubits.
-      backend: IBMQBackend
-        backend from provider.get_backend().
-      itr: int
-        Number of data points
 
-    Returns: array
-      A list of circuits with name 'itr0', 'itr1',...
+def meas_circ(nQubits, backend=None, itr=32):
     """
-    circ = QuantumCircuit(nQubits, nQubits)
-    for i in range(nQubits):
-        circ.ry(pi/2, 0)
-    circ.measure(range(nQubits), range(nQubits))
-    circ_trans = transpile(circ, backend, initial_layout=range(nQubits))
-
+    Generates 2 * itr circuits compatible with Qiskit 2.x and Braket.
+    - First half prepares |0>
+    - Second half prepares |1>
+    """
     circs = []
-    for i in range(itr):
-        circs.append(circ_trans.copy('itr' + str(i)))
-    return circs
+    
+    # 1. Create |0> circuits (Identity)
+    # Note: Explicit 'id' gates often optimized away, so we use barriers 
+    # or simple measurements to define the state.
+    c0 = QuantumCircuit(nQubits, nQubits)
+    # No gates needed for |0>, just measure. 
+    # We add a barrier to prevent transpiler from merging if we added ops later.
+    c0.barrier() 
+    c0.measure(range(nQubits), range(nQubits))
+    
+    # 2. Create |1> circuits (X gate)
+    c1 = QuantumCircuit(nQubits, nQubits)
+    c1.x(range(nQubits)) # Broadcast X to all qubits
+    c1.barrier()
+    c1.measure(range(nQubits), range(nQubits))
 
+    # 3. Transpile if backend provided (Optional but recommended for ISA)
+    if backend:
+        # In Qiskit 2.x, it's best to transpile once before copying
+        c0 = transpile(c0, backend)
+        c1 = transpile(c1, backend)
+
+    # 4. Create the batch
+    # We use metadata or naming to track them, though naming is less strict in V2
+    for i in range(itr):
+        # Create copies
+        c0_copy = c0.copy()
+        c0_copy.name = f"cal_0_itr{i}"
+        circs.append(c0_copy)
+        
+    for i in range(itr):
+        c1_copy = c1.copy()
+        c1_copy.name = f"cal_1_itr{i}"
+        circs.append(c1_copy)
+        
+    return circs
 
 def collect_filter_data(backend,
                         itr=32,
