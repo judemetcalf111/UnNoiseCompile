@@ -177,32 +177,44 @@ def meas_circ(nQubits, backend=None, itr=32):
     Generates 2 * itr circuits compatible with Qiskit 2.x and Braket.
     - First half prepares |0>
     - Second half prepares |1>
+
+    Args:
+        nQubits: int
+            number of qubits.
+        backend: Backend
+            A Qiskit backend instance. Used for transpilation.
+        itr: int
+            number of iterations of each state preparation.
+
+    Returns: list of form [{QuantumCircuit preparing |0>}, {QuantumCircuit preparing |1>}]
     """
     circs = []
     
-    # 1. Create |0> circuits (Identity)
+    # Create |0> circuits (Identity)
     # Note: Explicit 'id' gates often optimized away, so we use barriers 
     # or simple measurements to define the state.
     c0 = QuantumCircuit(nQubits, nQubits)
+
     # No gates needed for |0>, just measure. 
     # We add a barrier to prevent transpiler from merging if we added ops later.
     c0.barrier() 
     c0.measure(range(nQubits), range(nQubits))
     
-    # 2. Create |1> circuits (X gate)
+    # Create |1> circuits (X gate)
     c1 = QuantumCircuit(nQubits, nQubits)
     c1.x(range(nQubits)) # Broadcast X to all qubits
     c1.barrier()
     c1.measure(range(nQubits), range(nQubits))
 
-    # 3. Transpile if backend provided (Optional but recommended for ISA)
+    # Transpile if backend provided (Optional but recommended for ISA)
     if backend:
         # In Qiskit 2.x, it's best to transpile once before copying
         c0 = transpile(c0, backend)
         c1 = transpile(c1, backend)
 
-    # 4. Create the batch
-    # We use metadata or naming to track them, though naming is less strict in V2
+    # Create the batch
+    # We use metadata or naming to track them
+    ## Perhaps change to one request with many shots?
     for i in range(itr):
         # Create copies
         c0_copy = c0.copy()
