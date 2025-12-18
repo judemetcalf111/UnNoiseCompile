@@ -727,98 +727,6 @@ def findM(qs_ker, d_ker):
     except Exception:
         return -res.fun, res.x
 
-# def findM(qs_ker, d_ker):
-#     """
-#     Function for finding the M, the largest r(Q(lambda)) over all lambda
-#     in Algorithm 2 of https://doi.org/10.1137/16M1087229
-    
-#     we use minimize_scalar from scipy
-
-#     Parameters
-#     ----------
-#     qs_ker : scipy.stats.gaussian_kde
-#         the Q_D^{Q(prior)}(q) in Algorithm 1 of https://doi.org/10.1137/16M1087229.
-#     d_ker : scipy.stats.gaussian_kde
-#         pi_D^{obs}(q) in A997 of https://doi.org/10.1137/16M1087229.
-#     qs : numpy array
-#         samples generated from some given lambdas
-
-#     Returns
-#     -------
-#     M : float
-#         the largest r(Q(lambda)) over all lambda
-#     optimizer : float
-#         corresponding index of M
-
-#     """
-#     M = -1  # probablities cannot be negative, so -1 is small enough
-#     index = -1
-#     for i in range(qs.size):
-#         if qs_ker(qs[i]) > 0:
-#             if M <= d_ker(qs[i]) / qs_ker(qs[i]):
-#                 M = d_ker(qs[i]) / qs_ker(qs[i])
-#                 index = i
-    
-# #                
-#     xs = np.linspace(0, 1, 1000)
-#     ys = np.array([dq(x, qs_ker, d_ker) for x in xs])
-#     plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-#     plt.plot(xs, ys)
-#     plt.ylabel('-d/q')
-#     plt.xlabel('x')
-#     plt.show()
-   
-#     # Remove consecutive np.inf, otherwise optimization will fail
-#     #rough_dq = ys[(ys<np.inf) & (np.abs(ys)>1e-3)]
-#     rough_xs = xs[ys<np.inf]
-#     bds = (rough_xs[0], rough_xs[-1])
-#     # res = minimize_scalar(dq, args =(qs_ker, d_ker) ,bounds=bounds, method='bounded', options={'maxiter': 5000})
-#     res = minimize(dq, (rough_xs[np.argmin(ys[ys<np.inf])],), args =(qs_ker, d_ker) ,bounds=(bds,), method='L-BFGS-B')
-    
-    
-#     try:
-#         return -res.fun[0], res.x[0]
-#     except Exception:
-#         return -res.fun, res.x
-
-
-def find_least_norm(nQubits, ptilde):
-    """
-    Solve min ||ptilde - p||_2
-          s.t.
-            each entry of p sums to 1
-            each entry of p is non-negative
-
-    Parameters
-    ----------
-    nQubits : int
-        Number of qubits.
-    ptilde : array
-        probability vector.
-
-    Returns
-    -------
-    sol['status']: String
-        'optimal' if solve successfully.
-    sol['x']: array
-        the optimizer.
-
-    """
-    # Formulation
-    Q = 2 * matrix(np.identity(2**nQubits))
-    p = -2 * matrix(ptilde)
-
-    G = -matrix(np.identity(2**nQubits))
-    h = matrix(np.zeros(2**nQubits))
-
-    A = matrix(np.ones(2**nQubits), (1, 2**nQubits))
-    b = matrix(1.0)
-
-    solvers.options['show_progress'] = False
-    sol = solvers.qp(Q, p, G, h, A, b)
-    return sol['status'], sol['x']
-
-
 def output(d,
            interested_qubit,
            M,
@@ -1277,6 +1185,9 @@ class SplitMeasFilter:
         # Flatten and Normalize
         corrected_vec = current_tensor.flatten()
         
+        # OPTIONAL: Enforce physical constraints (probabilities >= 0)
+        # This replaces the 'find_least_norm' QP solver which is slow.
+        # Simple projection: Clip negatives and re-normalize.
         corrected_vec[corrected_vec < 0] = 0
         total_p = np.sum(corrected_vec)
         if total_p > 0:
