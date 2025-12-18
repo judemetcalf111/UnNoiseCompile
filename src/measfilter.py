@@ -1038,7 +1038,7 @@ def output(d,
     return prior_lambdas, post_lambdas
 
 
-class MeasFilter:
+class SplitMeasFilter:
     """Measurement error filter.
 
     Attributes:
@@ -1081,33 +1081,42 @@ class MeasFilter:
         self.mat_mode = None
             
     def create_filter_mat(self):
-            """
-            Create filter matrix using Means
-            """
-            first = True
-            for q in self.qubit_order:
-                q_key = f'Qubit{q}'
-                
-                # Retrieve the separate arrays
-                res_0 = self.post_marginals[q_key]['0']
-                res_1 = self.post_marginals[q_key]['1']
-                
-                # We calculate the measurement means independently
-                mean_0 = np.mean(res_0) # This is lambda_0 (1 - error_on_0)
-                mean_1 = np.mean(res_1) # This is lambda_1 (1 - error_on_1)
-                
-                # Forming to the array errMitMat expects: [lam0, lam1]
-                stitched_lambda = np.array([mean_0, mean_1])
-                
-                if first:
-                    Mx = errMitMat(stitched_lambda)
-                    first = False
-                else:
-                    Msub = errMitMat(stitched_lambda)
-                    Mx = np.kron(Mx, Msub)
-                    
-            self.mat_mean = Mx
-            # (Repeat logic for mat_mode if desired, using find_mode on the arrays)
+        """
+        Calculates and stores the 2x2 inverse matrices for each qubit individually.
+        This replaces the creation of the massive 2^N x 2^N matrix.
+        """
+        self.inv_matrices_mean = []
+        self.inv_matrices_mode = []
+
+        for q in self.qubit_order:
+            q_key = f'Qubit{q}'
+            
+            # --- MEAN STRATEGY ---
+            # Retrieve the marginal measurement errors from posterior
+            res_0 = self.post_marginals[q_key]['0']
+            res_1 = self.post_marginals[q_key]['1']
+            
+            lam0_mean = np.mean(res_0) # 1 - error_on_0
+            lam1_mean = np.mean(res_1) # 1 - error_on_1
+            
+            # Build scalable 2x2 A matrix and invert it
+            A_mean = np.array([[lam0_mean, 1 - lam1_mean],
+                               [1 - lam0_mean, lam1_mean]])
+            try:
+                self.inv_matrices_mean.append(np.linalg.inv(A_mean))
+            except np.linalg.LinAlgError:
+                self.inv_matrices_mean.append(np.eye(2)) # Fallback if singular
+
+            # --- MODE STRATEGY ---
+            lam0_mode = find_mode(res_0)
+            lam1_mode = find_mode(res_1)
+            
+            A_mode = np.array([[lam0_mode, 1 - lam1_mode],
+                               [1 - lam0_mode, lam1_mode]])
+            try:
+                self.inv_matrices_mode.append(np.linalg.inv(A_mode))
+            except np.linalg.LinAlgError:
+                self.inv_matrices_mode.append(np.eye(2))
 
     def inference(self,
                   nPrior=40000,
@@ -1184,7 +1193,7 @@ class MeasFilter:
             elif prep_state == '1':
                 # Store column 1
                 self.post_marginals[f'Qubit{i}']['1'] = post_lambdas[:, 1]
-        first_q = f'Qubit{self.qubit_order[0]}' # Ensuring at least one qubit's both marginals are available
+        first_q = f'Qubit{self.qubit_order[0]}' # Ensuring at least the first qubit's both marginals are available, and thus the whole batch!
         if (self.post_marginals[first_q]['0'] is not None and 
             self.post_marginals[first_q]['1'] is not None):
             self.create_filter_mat()
@@ -1238,66 +1247,45 @@ class MeasFilter:
             res['Qubit' + str(q)] = closest_mode(self.post['Qubit' + str(q)])
         return res
 
+    def _apply_tensor_inversion(self, counts, inv_matrices):
+        """
+        Helper function to apply the chain of inverses to a probability vector.
+        """
+        shots = sum(counts.values())
+        n = len(self.qubit_order)
+        
+        # Convert Dictionary counts to Vector
+        vec = dictToVec(n, counts) / shots
+        
+        # Reshape to Tensor [2, 2, ..., 2]
+        current_tensor = vec.reshape([2] * n)
+        
+        # Apply inverses sequentially
+        for i, inv_mat in enumerate(inv_matrices):
+            # Swap target axis 'i' to front (axis 0)
+            current_tensor = np.swapaxes(current_tensor, 0, i)
+            
+            # Flatten to (2, -1) and multiply: M @ vec
+            shape_now = current_tensor.shape
+            flat = current_tensor.reshape(2, -1)
+            new_flat = np.dot(inv_mat, flat)
+            
+            # Reshape back and swap axis back
+            current_tensor = new_flat.reshape(shape_now)
+            current_tensor = np.swapaxes(current_tensor, 0, i)
+            
+        # Flatten and Normalize
+        corrected_vec = current_tensor.flatten()
+        
+        corrected_vec[corrected_vec < 0] = 0
+        total_p = np.sum(corrected_vec)
+        if total_p > 0:
+            corrected_vec = corrected_vec / total_p
+            
+        return vecToDict(n, shots, corrected_vec)
+
     def filter_mean(self, counts):
-        """
-         Use posteror mean to filter measurement error out.
-
-        Parameters
-        ----------
-        counts : Dict
-            Counts of each basis.
-
-        Raises
-        ------
-        Exception
-            If we cannot filter the error.
-
-        Returns
-        -------
-        proc_counts : dict
-            Denoised counts.
-
-        """
-        shots = 0
-        for key in counts:
-            shots += counts[key]
-
-        real_vec = dictToVec(len(self.qubit_order), counts) / shots
-        proc_status, proc_vec = find_least_norm(
-            len(self.qubit_order), nl.solve(self.mat_mean, real_vec))
-        if proc_status != 'optimal':
-            raise Exception('Sorry, filtering has failed')
-        proc_counts = vecToDict(len(self.qubit_order), shots, proc_vec)
-        return proc_counts
+        return self._apply_tensor_inversion(counts, self.inv_matrices_mean)
 
     def filter_mode(self, counts):
-        """
-         Use posteror MAP to filter measurement error out.
-
-        Parameters
-        ----------
-        counts : Dict
-            Counts of each basis.
-
-        Raises
-        ------
-        Exception
-            If we cannot filter the error.
-
-        Returns
-        -------
-        proc_counts : dict
-            Denoised counts.
-
-        """
-        shots = 0
-        for key in counts:
-            shots += counts[key]
-
-        real_vec = dictToVec(len(self.qubit_order), counts) / shots
-        proc_status, proc_vec = find_least_norm(
-            len(self.qubit_order), nl.solve(self.mat_mode, real_vec))
-        if proc_status != 'optimal':
-            raise Exception('Sorry, filtering has failed')
-        proc_counts = vecToDict(len(self.qubit_order), shots, proc_vec)
-        return proc_counts
+        return self._apply_tensor_inversion(counts, self.inv_matrices_mode)
