@@ -24,6 +24,62 @@ from matplotlib.pyplot import figure
 width = 6.72 # plot width
 height = 4.15 # plot height
 
+import boto3
+from braket.aws import AwsDevice
+
+def get_braket_calibration_dict(device_arn, n_qubits=None):
+    """
+    Returns the params list in the exact format required by MeasFilter.
+    """
+    device = AwsDevice(device_arn)
+    properties = device.properties
+    
+    # Try to find qubit count if not provided
+    if n_qubits is None:
+        try:
+            n_qubits = properties.paradigm.qubitCount
+        except:
+            n_qubits = 5 # Manual override if needed
+
+    formatted_params = []
+
+    for q in range(n_qubits):
+        # 1. Default conservative error (5% error)
+        p_meas0_prep1 = 0.05 
+        p_meas1_prep0 = 0.05
+        
+        # 2. Try to extract real Fidelity from Braket Properties
+        # This structure depends on the provider (Rigetti, OQC, etc.)
+        try:
+            # Example for Rigetti (Standardized in Braket properties)
+            # We look for "fRO" (Readout Fidelity)
+            provider_specs = properties.provider.specs
+            qubit_specs = provider_specs.get(f"{q}Q", {}).get(f"{q}", {})
+            fRO = qubit_specs.get('fRO', None)
+            
+            if fRO:
+                error = 1.0 - fRO
+                # Assume symmetric error if specific p(0|1) isn't detailed
+                p_meas0_prep1 = error
+                p_meas1_prep0 = error
+        except:
+            # If extraction fails, we stick to the 0.05 default
+            pass
+
+        # 3. Create the dictionary for this qubit
+        qubit_cal = {
+            'qubit': q,
+            'pm0p1': p_meas0_prep1, # PROB MEASURING 0 GIVEN PREP 1
+            'pm1p0': p_meas1_prep0, # PROB MEASURING 1 GIVEN PREP 0
+            # Extra fields required by the code logic, even if unused
+            'itr': 32,
+            'shots': 8192
+        }
+        
+        formatted_params.append(qubit_cal)
+
+    return np.array(formatted_params)
+
 
 def param_record(backend, itr=32, shots=8192, if_write=True, file_address=''):
     """Write backend property into an array of dict 
@@ -148,83 +204,81 @@ def collect_filter_data(backend,
                         shots=8192,
                         if_write=True,
                         file_address='',
-                        job_id = ''):
-    """Collect data for constructing error filter.
-
-    Args:
-      backend: Backend
-      itr: int
-      shots: int
-      if_write: boolean
-      file_address: string
-      job_id: string
-
-    Returns: numpy array
-      An array of bit strings which is the output from circuits.
+                        job_id=''):
     """
-    # Attempt to record params
-    param_record(backend, itr, shots, if_write, file_address)
-
-    # Determine qubit count safely
+    Collects measurement data compatible with Amazon Braket Qiskit Provider.
+    """
+    # 1. Determine qubit count safely
     try:
-        if hasattr(backend, 'configuration'):
-            nQubits = backend.configuration().n_qubits
-        else:
-            nQubits = backend.num_qubits
+        # Braket backends usually have 'num_qubits' attribute
+        nQubits = backend.num_qubits
     except:
-        # Fallback for simulators usually
-        nQubits = 5 
+        nQubits = 5 # Fallback
 
     readout_m0 = np.array([])
-    circ = meas_circ(nQubits, backend, itr=itr)
+    
+    # 2. Generate the circuits (One circuit repeated 'itr' times with unique names)
+    circs = meas_circ(nQubits, backend, itr=itr)
 
-    # Excute jobs
+    # 3. Job Execution or Retrieval
     if job_id:
+        print(f"Retrieving existing Braket Job ID: {job_id}")
         try:
-            # Robust retrieval for 2.x/Braket
-            if hasattr(backend, 'provider') and backend.provider:
-                job_m0 = backend.provider.retrieve_job(job_id)
-            elif hasattr(backend, 'retrieve_job'):
-                job_m0 = backend.retrieve_job(job_id)
-            elif hasattr(backend, 'service'):
-                job_m0 = backend.service.job(job_id)
-            else:
-                raise Exception("Backend does not support retrieval")
-            print("Job id:", job_m0.job_id())
+            # Braket Provider usually allows retrieving via the backend or service
+            job_m0 = backend.retrieve_job(job_id)
         except Exception as e:
-            print(f"Could not retrieve job {job_id}: {e}")
+            print(f"Failed to retrieve job: {e}")
             return np.array([])
     else:
-        # Qiskit 1.0: backend.run()
+        print(f"Submitting new batch job with {itr} circuits to {backend.name}...")
         try:
-            job_m0 = backend.run(circ, shots=shots, memory=True)
-        except TypeError:
-            # Fallback for simulators not accepting memory kwarg
-            job_m0 = backend.run(circ, shots=shots)
+            # Execute all circuits in one batch
+            # 'memory=True' is CRITICAL to get the bitstrings required for this inference
+            job_m0 = backend.run(circs, shots=shots, memory=True)
+            print(f"Job submitted. ID: {job_m0.job_id()}")
             
-        print("Job id:", job_m0.job_id())
+            # Optional: Explicit wait loop if the provider doesn't block automatically
+            # while not job_m0.in_final_state():
+            #     print("Status:", job_m0.status())
+            #     time.sleep(5)
+                
+        except Exception as e:
+            print(f"Job submission failed: {e}")
+            return np.array([])
 
-    # Record bit string
+    # 4. Extract Results
     try:
+        # This blocks until the job is done
         m0_res = job_m0.result()
+        
+        print("Job complete. extracting memory...")
+
+        # Loop through the experiments (one for each circuit in the batch)
         for i in range(itr):
-            # Access by integer index to be safe across providers
+            # get_memory(i) retrieves the list of bitstrings for the i-th circuit
+            # e.g., ['000', '001', '000', ...]
             memory_data = m0_res.get_memory(i)
             readout_m0 = np.append(readout_m0, memory_data)
 
+        # 5. Save to CSV (Original script logic)
         if if_write:
-            with open(file_address + 'Filter_data.csv', mode='w') as sgr:
-                read_writer = csv.writer(sgr,
-                                         delimiter=',',
-                                         quotechar='"',
-                                         quoting=csv.QUOTE_MINIMAL)
+            filename = file_address + 'Filter_data.csv'
+            print(f"Saving data to {filename}...")
+            # Using 'w' mode with standard csv writer
+            with open(filename, mode='w', newline='') as sgr:
+                read_writer = csv.writer(sgr, quoting=csv.QUOTE_MINIMAL)
+                # The original script writes the entire flattened array as one row
                 read_writer.writerow(readout_m0)
+                
     except Exception as e:
         print(f"Error processing results: {e}")
+        # If accessing memory fails, print available keys to help debug
+        try:
+            print("Result keys available:", m0_res.get_counts())
+        except:
+            pass
 
     return readout_m0
-
-
 def read_params(file_address=''):
     """Read out backend properties from csv file generated by param_record().
 
@@ -526,35 +580,8 @@ def errMitMat(lambdas_sample):
     A = np.array([[pm0p0, 1 - pm1p1], [1 - pm0p0, pm1p1]])
     return (A)
 
+
 def err2MitMat(lambdas_sample):
-    """
-    Compute the matrix A from
-    Ax = b, where A is the error mitigation matrix (transition matrix),
-    x is the number appearence of a basis in theory
-    b is the number appearence of a basis in practice with noise
-
-    Parameters
-    ----------
-    lambdas_sample : numpy array
-        first two entry must be 
-        Pr(Measuring 0|Preparing 0) and Pr(Measuring 1|Preparing 1)
-
-    Returns
-    -------
-    A : numpy array
-        Transition matrix that applies classical measurement error.
-
-    """
-    #
-    # Input; lambdas_sample - np.array, array of (1 - error rate) whose length is number of qubits
-    # Output; A - np.ndarray, as described above
-    pm0p0 = lambdas_sample[0]
-    pm1p1 = lambdas_sample[1]
-    # Initialize the matrix
-    A = np.array([[pm0p0, 1 - pm1p1], [1 - pm0p0, pm1p1]])
-    return (A)
-
-def errMitMat(lambdas_sample):
     """
     Compute the matrix A from
     Ax = b, where A is the error mitigation matrix (transition matrix),
@@ -590,7 +617,7 @@ def errMitMat(lambdas_sample):
                   
     return (A)
 
-def QoI(prior_lambdas):
+def QoI(prior_lambdas, prep_state='0'):
     """
     Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
 
@@ -598,6 +625,9 @@ def QoI(prior_lambdas):
     ----------
     prior_lambdas : numpy array
         each subarray is an individual prior lambda.
+
+    prep_state : string, optional
+        The state prepared to, 
 
     Returns
     -------
@@ -612,14 +642,23 @@ def QoI(prior_lambdas):
     # Initialize the output array
     qs = np.array([])
 
-    # Smiluate measurement error, assume independence
-    for i in range(shape[0]):
+    # Define Ideal Vector based on what we prepared
+    if prep_state == '0':
+        # [Prob(0), Prob(1)] -> [100%, 0%]
+        M_ideal = np.array([1.0, 0.0]) 
+    elif prep_state == '1':
+        # [Prob(0), Prob(1)] -> [0%, 100%]
+        M_ideal = np.array([0.0, 1.0])
+    else: # Default to '+'
+        print('Default to |+>, set prep_state = "0" or "1" for these preparations.')
         M_ideal = np.ones(2**nQubit) / 2**nQubit
 
+    # Simulate measurement error
+    for i in range(shape[0]):
         A = errMitMat(prior_lambdas[i])
         M_noisy = np.dot(A, M_ideal)
 
-        # Only record interested qubits
+        # Only record interested qubits (Prob of measuring 0)
         qs = np.append(qs, M_noisy[0])
     return qs
 
@@ -639,59 +678,108 @@ def dq(x, qs_ker, d_ker):
         return np.inf
 
 
+
+
 def findM(qs_ker, d_ker):
     """
-    Function for finding the M, the largest r(Q(lambda)) over all lambda
-    in Algorithm 2 of https://doi.org/10.1137/16M1087229
-    
-    we use minimize_scalar from scipy
-
-    Parameters
-    ----------
-    qs_ker : scipy.stats.gaussian_kde
-        the Q_D^{Q(prior)}(q) in Algorithm 1 of https://doi.org/10.1137/16M1087229.
-    d_ker : scipy.stats.gaussian_kde
-        pi_D^{obs}(q) in A997 of https://doi.org/10.1137/16M1087229.
-    qs : numpy array
-        samples generated from some given lambdas
-
-    Returns
-    -------
-    M : float
-        the largest r(Q(lambda)) over all lambda
-    optimizer : float
-        corresponding index of M
-
+    Updated findM to restrict optimization bounds to the effective support
+    of the prior distribution, preventing edge explosions.
     """
-    # M = -1  # probablities cannot be negative, so -1 is small enough
-    # index = -1
-    # for i in range(qs.size):
-    #     if qs_ker(qs[i]) > 0:
-    #         if M <= d_ker(qs[i]) / qs_ker(qs[i]):
-    #             M = d_ker(qs[i]) / qs_ker(qs[i])
-    #             index = i
+    # 1. Scan the space to find where the prior actually exists
+    x_scan = np.linspace(0, 1, 1000)
+    prior_density = qs_ker(x_scan)
     
-#                
-    xs = np.linspace(0, 1, 1000)
-    ys = np.array([dq(x, qs_ker, d_ker) for x in xs])
-    plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-    plt.plot(xs, ys)
-    plt.ylabel('-d/q')
-    plt.xlabel('x')
-    plt.show()
-   
-    # Remove consecutive np.inf, otherwise optimization will fail
-    #rough_dq = ys[(ys<np.inf) & (np.abs(ys)>1e-3)]
-    rough_xs = xs[ys<np.inf]
-    bds = (rough_xs[0], rough_xs[-1])
-    # res = minimize_scalar(dq, args =(qs_ker, d_ker) ,bounds=bounds, method='bounded', options={'maxiter': 5000})
-    res = minimize(dq, (rough_xs[np.argmin(ys[ys<np.inf])],), args =(qs_ker, d_ker) ,bounds=(bds,), method='L-BFGS-B')
+    # 2. Define Effective Support: 
+    # Only consider regions where prior density is at least 1% of its peak.
+    # This cuts off the unstable "tails" at 0 and 1.
+    threshold = 0.01 * np.max(prior_density)
+    valid_indices = np.where(prior_density > threshold)[0]
     
+    if len(valid_indices) > 1:
+        # Set bounds to the range where prior is significant
+        lower_bound = x_scan[valid_indices[0]]
+        upper_bound = x_scan[valid_indices[-1]]
+        bds = (lower_bound, upper_bound)
+    else:
+        # Fallback if density is flat or error
+        bds = (0.2, 0.8) 
+
+    # --- Debugging Plot (Optional: Keep your plot to verify) ---
+    ys = np.array([dq(x, qs_ker, d_ker) for x in x_scan])
+    # plt.figure(figsize=(width,height), dpi=100, facecolor='white')
+    # plt.plot(x_scan, ys)
+    # plt.title("Objective Function with Edge Explosions")
+    # plt.ylim(-50, 0) # Cap the view to see the middle trough
+    # plt.show()
+    # -----------------------------------------------------------
+
+    # 3. Find a safe starting point (x0) inside the valid bounds
+    # We look for the minimum of y only within our valid indices
+    valid_ys = ys[valid_indices]
+    valid_xs = x_scan[valid_indices]
+    x0 = valid_xs[np.argmin(valid_ys)]
+
+    # 4. Run Optimizer with safe bounds
+    res = minimize(dq, (x0,), args=(qs_ker, d_ker), bounds=(bds,), method='L-BFGS-B')
     
     try:
         return -res.fun[0], res.x[0]
     except Exception:
         return -res.fun, res.x
+
+# def findM(qs_ker, d_ker):
+#     """
+#     Function for finding the M, the largest r(Q(lambda)) over all lambda
+#     in Algorithm 2 of https://doi.org/10.1137/16M1087229
+    
+#     we use minimize_scalar from scipy
+
+#     Parameters
+#     ----------
+#     qs_ker : scipy.stats.gaussian_kde
+#         the Q_D^{Q(prior)}(q) in Algorithm 1 of https://doi.org/10.1137/16M1087229.
+#     d_ker : scipy.stats.gaussian_kde
+#         pi_D^{obs}(q) in A997 of https://doi.org/10.1137/16M1087229.
+#     qs : numpy array
+#         samples generated from some given lambdas
+
+#     Returns
+#     -------
+#     M : float
+#         the largest r(Q(lambda)) over all lambda
+#     optimizer : float
+#         corresponding index of M
+
+#     """
+#     M = -1  # probablities cannot be negative, so -1 is small enough
+#     index = -1
+#     for i in range(qs.size):
+#         if qs_ker(qs[i]) > 0:
+#             if M <= d_ker(qs[i]) / qs_ker(qs[i]):
+#                 M = d_ker(qs[i]) / qs_ker(qs[i])
+#                 index = i
+    
+# #                
+#     xs = np.linspace(0, 1, 1000)
+#     ys = np.array([dq(x, qs_ker, d_ker) for x in xs])
+#     plt.figure(figsize=(width,height), dpi=100, facecolor='white')
+#     plt.plot(xs, ys)
+#     plt.ylabel('-d/q')
+#     plt.xlabel('x')
+#     plt.show()
+   
+#     # Remove consecutive np.inf, otherwise optimization will fail
+#     #rough_dq = ys[(ys<np.inf) & (np.abs(ys)>1e-3)]
+#     rough_xs = xs[ys<np.inf]
+#     bds = (rough_xs[0], rough_xs[-1])
+#     # res = minimize_scalar(dq, args =(qs_ker, d_ker) ,bounds=bounds, method='bounded', options={'maxiter': 5000})
+#     res = minimize(dq, (rough_xs[np.argmin(ys[ys<np.inf])],), args =(qs_ker, d_ker) ,bounds=(bds,), method='L-BFGS-B')
+    
+    
+#     try:
+#         return -res.fun[0], res.x[0]
+#     except Exception:
+#         return -res.fun, res.x
 
 
 def find_least_norm(nQubits, ptilde):
@@ -738,7 +826,8 @@ def output(d,
            prior_sd,
            seed=127,
            show_denoised=False,
-           file_address=''):
+           file_address='',
+           prep_state='0'):
     """
       The main function that do all Bayesian inferrence part
 
@@ -792,11 +881,11 @@ def output(d,
 
     # Compute distribution of Pr(meas. 0) from Qiskit results
     given_errmat = errMitMat(average_lambdas)
-#    qiskit_p0 = np.empty(len(d))
-#    for i in range(len(d)):
-#        single_res = nl.solve(given_errmat, [d[i], 1 - d[i]])
-#        qiskit_p0[i] = single_res[0]
-#    qiskit_ker = ss.gaussian_kde(qiskit_p0)
+    # qiskit_p0 = np.empty(len(d))
+    # for i in range(len(d)):
+    #     single_res = nl.solve(given_errmat, [d[i], 1 - d[i]])
+    #     qiskit_p0[i] = single_res[0]
+    # qiskit_ker = ss.gaussian_kde(qiskit_p0)
 
     if average_lambdas[0] == 1 or average_lambdas[0] < 0.7:
         average_lambdas[0] = 0.95
@@ -816,9 +905,8 @@ def output(d,
         prior_lambdas[i] = one_sample
 
     # Produce prior QoI
-    qs = QoI(prior_lambdas)
-    #print(qs)
-    qs_ker = ss.gaussian_kde(qs)  # i.e., pi_D^{Q(prior)}(q), q = Q(lambda)
+    qs = QoI(prior_lambdas, prep_state=prep_state) 
+    qs_ker = ss.gaussian_kde(qs) # i.e., pi_D^{Q(prior)}(q), q = Q(lambda)
 
     # Plot and Print
     print('Given Lambdas', average_lambdas)
@@ -849,7 +937,7 @@ def output(d,
     post_lambdas = post_lambdas.reshape(
         int(post_lambdas.size / num_lambdas),
         num_lambdas)  # Reshape since append destory subarrays
-    post_qs = QoI(post_lambdas)
+    post_qs = QoI(post_lambdas, prep_state=prep_state)
     post_ker = ss.gaussian_kde(post_qs)
 
     xs = np.linspace(0, 1, 1000)
@@ -987,43 +1075,47 @@ class MeasFilter:
         self.qubit_order = qubit_order
         self.prior = {}
         self.post = {}
+        self.post_marginals = {f'Qubit{q}': {'0': None, '1': None} for q in qubit_order}
         self.params = None
         self.mat_mean = None
         self.mat_mode = None
             
     def create_filter_mat(self):
-        # Create filter matrix with Posterior mean
-        first = True
-        for q in self.qubit_order:
-            if first:
-                postLam_mean = closest_average(self.post['Qubit' + str(q)])
-                Mx = errMitMat(postLam_mean)
-                first = False
-            else:
-                postLam_mean = closest_average(self.post['Qubit' + str(q)])
-                Msub = errMitMat(postLam_mean)
-                Mx = np.kron(Mx, Msub)
-        self.mat_mean = Mx
-
-        # Create filter matrix with Posterior mode
-        first = True
-        for q in self.qubit_order:
-            if first:
-                postLam_mean = closest_mode(self.post['Qubit' + str(q)])
-                Mx = errMitMat(postLam_mean)
-                first = False
-            else:
-                postLam_mean = closest_mode(self.post['Qubit' + str(q)])
-                Msub = errMitMat(postLam_mean)
-                Mx = np.kron(Mx, Msub)
-        self.mat_mode = Mx
+            """
+            Create filter matrix using Means
+            """
+            first = True
+            for q in self.qubit_order:
+                q_key = f'Qubit{q}'
+                
+                # Retrieve the separate arrays
+                res_0 = self.post_marginals[q_key]['0']
+                res_1 = self.post_marginals[q_key]['1']
+                
+                # We calculate the measurement means independently
+                mean_0 = np.mean(res_0) # This is lambda_0 (1 - error_on_0)
+                mean_1 = np.mean(res_1) # This is lambda_1 (1 - error_on_1)
+                
+                # Forming to the array errMitMat expects: [lam0, lam1]
+                stitched_lambda = np.array([mean_0, mean_1])
+                
+                if first:
+                    Mx = errMitMat(stitched_lambda)
+                    first = False
+                else:
+                    Msub = errMitMat(stitched_lambda)
+                    Mx = np.kron(Mx, Msub)
+                    
+            self.mat_mean = Mx
+            # (Repeat logic for mat_mode if desired, using find_mode on the arrays)
 
     def inference(self,
                   nPrior=40000,
                   Priod_sd=0.1,
                   seed=227,
                   shots_per_point=1024,
-                  show_denoised=False):
+                  show_denoised=False,
+                  prep_state='0'):
         """
           Do Bayesian interence
 
@@ -1057,7 +1149,7 @@ class MeasFilter:
 
         
         try:
-            self.params = read_params(self.file_address)
+            self.params = get_braket_calibration_data()
             itr = self.params[0]['itr']
             shots = self.params[0]['shots']
             num_points = int(itr * shots / shots_per_point)
@@ -1066,12 +1158,13 @@ class MeasFilter:
             self.params = {}
             for q in self.qubit_order:
                 self.params[q] = {}
-                self.params[q]['pm1p0'] = 0.05
-                self.params[q]['pm0p1'] = 0.05
+                self.params[q]['pm1p0'] = 0.005
+                self.params[q]['pm0p1'] = 0.005
+            print('Warning: Cannot get backend calibration data, using default parameters instead.')
 
         info = {}
         for i in self.qubit_order:
-            print('Qubit %d' % (i))
+            print(f'Inferring Qubit {i} for State |{prep_state}>')
             d = getData0(self.data, num_points, i)
             prior_lambdas, post_lambdas = output(
                 d,
@@ -1081,10 +1174,20 @@ class MeasFilter:
                 Priod_sd,
                 seed=seed,
                 show_denoised=show_denoised,
-                file_address=self.file_address)
+                file_address=self.file_address,
+                prep_state=prep_state)
             self.prior['Qubit' + str(i)] = prior_lambdas
             self.post['Qubit' + str(i)] = post_lambdas
-        self.create_filter_mat()
+            if prep_state == '0':
+                # Store column 0
+                self.post_marginals[f'Qubit{i}']['0'] = post_lambdas[:, 0]
+            elif prep_state == '1':
+                # Store column 1
+                self.post_marginals[f'Qubit{i}']['1'] = post_lambdas[:, 1]
+        first_q = f'Qubit{self.qubit_order[0]}' # Ensuring at least one qubit's both marginals are available
+        if (self.post_marginals[first_q]['0'] is not None and 
+            self.post_marginals[first_q]['1'] is not None):
+            self.create_filter_mat()
 
     def post_from_file(self):
         """
