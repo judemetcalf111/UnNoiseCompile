@@ -755,6 +755,18 @@ def findM(qs_ker, d_ker):
         return -res.fun[0], res.x[0]
     except Exception:
         return -res.fun, res.x
+    
+def QoI_single(lambdas, prep_state='0'):
+    """
+    Optimized QoI that maps Success Rate (lambda) to Prob(Measuring 0).
+    """
+    if prep_state == '0':
+        # If Prep 0, P(Meas 0) = Success Rate
+        return lambdas 
+    elif prep_state == '1':
+        # If Prep 1, P(Meas 0) = 1.0 - Success Rate
+        return 1.0 - lambdas
+    return lambdas
 
 def output(d,
            interested_qubit,
@@ -762,7 +774,6 @@ def output(d,
            params,
            prior_sd,
            seed=127,
-           show_denoised=False,
            file_address='',
            prep_state='0'):
     """
@@ -808,175 +819,77 @@ def output(d,
     """
     # Algorithm 1 of https://doi.org/10.1137/16M1087229
     np.random.seed(seed)
-    num_lambdas = 2
-    # Get distribution of data (Gaussian KDE)
-    d_ker = ss.gaussian_kde(d)  # i.e., pi_D^{obs}(q), q = Q(lambda)
-    average_lambdas = np.array([
-        1 - params[interested_qubit]['pm1p0'],
-        1 - params[interested_qubit]['pm0p1']
-    ])
+    if prep_state == '0':
+        # We are looking for Success Rate on 0 (1 - p(1|0))
+        prior_mean = 1.0 - params[interested_qubit].get('pm1p0', 0.05)
+    else:
+        # We are looking for Success Rate on 1 (1 - p(0|1))
+        prior_mean = 1.0 - params[interested_qubit].get('pm0p1', 0.05)
 
-    if average_lambdas[0] == 1 or average_lambdas[0] < 0.7:
-        average_lambdas[0] = 0.95
-    if average_lambdas[1] == 1 or average_lambdas[1] < 0.7:
-        average_lambdas[1] = 0.95
+    # Sanity check constraints
+    if prior_mean > 1.0 or prior_mean < 0.7:
+        prior_mean = 0.95
 
-    # Sample prior lambdas, assume prior distribution is Normal distribution with mean as the given probality from IBM
-    # Absolute value is used here to avoid negative values, so it is little twisted, may consider Gamma Distribution
-    prior_lambdas = np.zeros(M * num_lambdas).reshape((M, num_lambdas))
+    prior_lambdas = tnorm01(prior_mean, prior_sd, size=M) # 1D single lambda array of size M
 
-    for i in range(M):
-        one_sample = np.zeros(num_lambdas)
-        for j in range(num_lambdas):
-            one_sample[j] = tnorm01(average_lambdas[j], prior_sd)
-            # while one_sample[j]<= 0 or one_sample[j] > 1:
-            #     one_sample[j] = np.random.normal(average_lambdas[j],prior_sd,1)
-        prior_lambdas[i] = one_sample
+    qs = QoI_single(prior_lambdas, prep_state=prep_state) # Single lambda QoI, optimising to find e0 and e1 separately
 
-    # Produce prior QoI
-    qs = QoI(prior_lambdas, prep_state=prep_state) 
-    qs_ker = ss.gaussian_kde(qs) # i.e., pi_D^{Q(prior)}(q), q = Q(lambda)
+    d_ker = ss.gaussian_kde(d)
+    qs_ker = ss.gaussian_kde(qs)
 
-    # Plot and Print
-    print('Given Lambdas', average_lambdas)
+    print(f'Given Lambda preparing {prep_state}): success rate = {prior_mean:.4f}')
 
-    # Algorithm 2 of https://doi.org/10.1137/16M1087229
-
-    # Find the max ratio r(Q(lambda)) over all lambdas
+    # Find the max ratio r(Q(lambda)) over a single lambda
 
     max_r, max_q = findM(qs_ker, d_ker)
+
     # Print and Check
     print('Final Accepted Posterior Lambdas')
     print('M: %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
           (max_r, max_q, d_ker(max_q), qs_ker(max_q)))
 
     post_lambdas = np.array([])
-    # Go to Rejection Iteration
-    for p in range(M):
-        # Monitor Progress
-        print('Progress: {:.3%}'.format(p/M), end='\r')
-        
-        r = d_ker(qs[p]) / qs_ker(qs[p])
-        eta = r / max_r
-        if eta > np.random.uniform(0, 1, 1):
-            post_lambdas = np.append(post_lambdas, prior_lambdas[p])
-    print()
+    # Rejection Iteration (vectorized!)
+    r_vals = d_ker(qs) / qs_ker(qs)
+    eta = r_vals / max_r 
+
+    # Accept based on uniform random draw
+    accept_mask = eta > np.random.uniform(0, 1, M)
+    post_lambdas = prior_lambdas[accept_mask]
     
-    
-    post_lambdas = post_lambdas.reshape(
-        int(post_lambdas.size / num_lambdas),
-        num_lambdas)  # Reshape since append destory subarrays
-    post_qs = QoI(post_lambdas, prep_state=prep_state)
+    post_qs = QoI_single(post_lambdas, prep_state=prep_state)
     post_ker = ss.gaussian_kde(post_qs)
 
-    try:
-        prep_state_float = float(prep_state)
-        if prep_state_float == 0.0:
-            xs = np.linspace(0, 1, 1000)
-            xsd = np.linspace(0.96, 1.0, 1000)
-        elif prep_state_float == 1.0:
-            xs = np.linspace(0, 1.0, 1000)
-            xsd = np.linspace(0, 0.04, 1000)
-        else:
-            xs = np.linspace(0, 1, 1000)
-            xsd = np.linspace(0, 1, 1000)
-    except TypeError:
-        print('prep_state is not a numerical target, plotting full range 0 to 1')
-        xs = np.linspace(0, 1, 1000)
-        xsd = np.linspace(0, 1, 1000)
+    # Logging
+    print('Accepted N: %d (%.1f%%)' % (len(post_lambdas), 100*len(post_lambdas)/M))
+    print(f'Posterior Mean for preparing {prep_state}: success rate ~ {np.mean(post_lambdas):.6f}')
 
-    I = 0
-    for i in range(xs.size - 1):
-        q = xs[i]
-        if qs_ker(q) > 0:
-            r = d_ker(q) / qs_ker(q)
-            I += r * qs_ker.pdf(q) * (xs[i + 1] - xs[i])  # Just Riemann Sum
+    # Save results as a 1D array
+    filename = file_address + f'Post_Qubit{interested_qubit}.csv'
+    np.savetxt(filename, post_lambdas, delimiter=',')
 
-    print('Accepted Number N: %.d, fraction %.3f' %
-          (post_lambdas.shape[0], post_lambdas.shape[0] / M))
-    print('I(pi^post_Lambda) = %.5g' % (I))  # Need to close to 1
-    print('Posterior Lambda Mean', closest_average(post_lambdas))
-    print('Posterior Lambda Mode', closest_mode(post_lambdas))
-
-    print('0 to 1: KL-Div(pi_D^Q(post),pi_D^obs) = %6g' %
-          (ss.entropy(post_ker(xs), d_ker(xs))))
-    print('0 to 1: KL-Div(pi_D^obs,pi_D^Q(post)) = %6g' %
-          (ss.entropy(d_ker(xs), post_ker(xs))))
-    # print('0 to 1: KL-Div(qiskit,pi_D^obs) = %6g' %
-    #       (ss.entropy(qiskit_ker(xs), d_ker(xs))))
-    # print('0 to 1: KL-Div(pi_D^obs,qiskit) = %6g' %
-    #       (ss.entropy(d_ker(xs), qiskit_ker(xs))))
-
-    # print('Post and Data: Sum of Differences ',
-    #       np.sum(np.abs(post_ker(xs) - d_ker(xs)) / 1000))
-    # print('Qisk and Data: Sum of Differences ',
-    #       np.sum(np.abs(qiskit_ker(xs) - d_ker(xs)) / 1000))
-
-    with open(file_address + 'Post_Qubit{}.csv'.format(interested_qubit),
-              mode='w',
-              newline='') as sgm:
-        writer = csv.writer(sgm,
-                            delimiter=',',
-                            quotechar='"',
-                            quoting=csv.QUOTE_MINIMAL)
-        for i in range(post_lambdas.shape[0]):
-            writer.writerow(post_lambdas[i])
-
-    # Plots
-    # fig = plot_setup()
-    # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
-    plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-    plt.plot(xsd,
-             d_ker(xsd),
-             color='Red',
-             linestyle='dashed',
-             linewidth=3,
-             label=r'$\pi^{\mathrm{obs}}_{\mathcal{D}}$')
-    plt.plot(xsd, post_ker(xsd), color='Blue', label=r'$\pi_{\mathcal{D}}^{Q(\mathrm{post})}$')
-    plt.xlabel('Pr(Meas. 0)')
+    # --------------------- Plotting ---------------------
+    xs = np.linspace(0, 1, 1000)
+    # Plotting range depends on prep_state (0 is high, 1 is low)
+    if prep_state == '0':
+        xsd = np.linspace(0.96, 1.0, 500)
+    elif prep_state == '1':
+        xsd = np.linspace(0.0, 0.04, 500)
+    else:
+        print('Plotting full range for unknown prep_state, please supply prep_state "0" or "1".')
+        xsd = xs
+        
+    plt.figure(figsize=(6, 4), dpi=100, facecolor='white')
+    plt.plot(xsd, d_ker(xsd), 'r--', lw=2, label='Observed Data')
+    plt.plot(xsd, post_ker(xsd), 'b-', label='Posterior Model')
+    plt.xlabel('Average Qubit Value')
     plt.ylabel('Density')
+    plt.title(f'Calibration Qubit {interested_qubit} |{prep_state}>')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(file_address + 'QoI-Qubit%g.pdf' % interested_qubit)
+    plt.savefig(file_address + f'QoI-Qubit{interested_qubit}.pdf')
     plt.show()
 
-    if show_denoised:
-        res_proc = np.array([])
-        for lam in post_lambdas:
-            M_sub = errMitMat(lam)
-            res_proc = np.append(
-                res_proc,
-                np.array([
-                    nl.solve(M_sub, [d[ind], 1 - d[ind]])[0]
-                    for ind in range(len(d))
-                ]))
-        proc_ker = ss.gaussian_kde(res_proc)
-
-        # Denoised by Qiskit Parameters
-        M_qsub = errMitMat(
-            np.array([
-                1 - params[interested_qubit]['pm1p0'],
-                1 - params[interested_qubit]['pm0p1']
-            ]))
-        res_qisk = np.array([
-            nl.solve(M_qsub, [d[ind], 1 - d[ind]])[0] for ind in range(len(d))
-        ])
-        qisk_ker = ss.gaussian_kde(res_qisk)
-        
-        # fig = plot_setup()
-        # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
-        #plt.plot(xsd,d_ker(xsd),color='Red',linestyle='dashed',label = '(Noisy) Data')
-        plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-        plt.plot(xsd, proc_ker(xsd), color='Blue', label='By Post')
-        plt.plot(xsd, qisk_ker(xsd), color='green', label='By Prior')
-        plt.axvline(x=0.5, color='black', label='Ideal')
-        plt.xlabel('Pr(Meas. 0)')
-        plt.ylabel('Density')
-        #plt.title('Denoised Pr(Meas. 0), Qubit %g'%interested_qubit)
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(file_address + 'DQoI-Qubit%g.pdf' % interested_qubit)
-        plt.show()
     return prior_lambdas, post_lambdas
 
 
