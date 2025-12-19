@@ -735,20 +735,20 @@ def findM(qs_ker, d_ker):
 
     # --- Debugging Plot (Optional: Keep your plot to verify) ---
     ys = np.array([dq(x, qs_ker, d_ker) for x in x_scan])
-    # plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-    # plt.plot(x_scan, ys)
-    # plt.title("Objective Function with Edge Explosions")
-    # plt.ylim(-50, 0) # Cap the view to see the middle trough
-    # plt.show()
+    plt.figure(figsize=(width,height), dpi=100, facecolor='white')
+    plt.plot(x_scan, ys)
+    plt.title("Objective Function with Edge Explosions")
+    plt.ylim(-50, 0) # Cap the view to see the middle trough
+    plt.show()
     # -----------------------------------------------------------
 
-    # 3. Find a safe starting point (x0) inside the valid bounds
+    # Find a safe starting point (x0) inside the valid bounds
     # We look for the minimum of y only within our valid indices
     valid_ys = ys[valid_indices]
     valid_xs = x_scan[valid_indices]
     x0 = valid_xs[np.argmin(valid_ys)]
 
-    # 4. Run Optimizer with safe bounds
+    # Run Optimizer with safe bounds
     res = minimize(dq, (x0,), args=(qs_ker, d_ker), bounds=(bds,), method='L-BFGS-B')
     
     try:
@@ -816,14 +816,6 @@ def output(d,
         1 - params[interested_qubit]['pm0p1']
     ])
 
-    # Compute distribution of Pr(meas. 0) from Qiskit results
-    given_errmat = errMitMat(average_lambdas)
-    # qiskit_p0 = np.empty(len(d))
-    # for i in range(len(d)):
-    #     single_res = nl.solve(given_errmat, [d[i], 1 - d[i]])
-    #     qiskit_p0[i] = single_res[0]
-    # qiskit_ker = ss.gaussian_kde(qiskit_p0)
-
     if average_lambdas[0] == 1 or average_lambdas[0] < 0.7:
         average_lambdas[0] = 0.95
     if average_lambdas[1] == 1 or average_lambdas[1] < 0.7:
@@ -877,8 +869,21 @@ def output(d,
     post_qs = QoI(post_lambdas, prep_state=prep_state)
     post_ker = ss.gaussian_kde(post_qs)
 
-    xs = np.linspace(0, 1, 1000)
-    xsd = np.linspace(0.3, 0.7, 1000)
+    try:
+        prep_state_float = float(prep_state)
+        if prep_state_float == 0.0:
+            xs = np.linspace(0, 1, 1000)
+            xsd = np.linspace(0.96, 1.0, 1000)
+        elif prep_state_float == 1.0:
+            xs = np.linspace(0, 1.0, 1000)
+            xsd = np.linspace(0, 0.04, 1000)
+        else:
+            xs = np.linspace(0, 1, 1000)
+            xsd = np.linspace(0, 1, 1000)
+    except TypeError:
+        print('prep_state is not a numerical target, plotting full range 0 to 1')
+        xs = np.linspace(0, 1, 1000)
+        xsd = np.linspace(0, 1, 1000)
 
     I = 0
     for i in range(xs.size - 1):
@@ -1284,78 +1289,81 @@ class SplitMeasFilter:
     def filter_mode(self, counts):
         return self._apply_tensor_inversion(counts, self.inv_matrices_mode)
 
-def error_distributions(self, plotting=True, save_plots=False):
-        """
-        Calculates statistics and (optionally) plots the posterior distribution 
-        of measurement errors for each qubit.
-        
-        Returns:
-            stats (dict): Dictionary containing mean, std, and 95% Confidence Intervals
-                          for both error_0 (p(1|0)) and error_1 (p(0|1)).
-        """
-        stats = {}
-        
-        for q in self.qubit_order:
-            q_key = f'Qubit{q}'
+    def error_distributions(self, plotting=True, save_plots=False):
+            """
+            Calculates statistics and (optionally) plots the posterior distribution 
+            of measurement errors for each qubit.
             
-            # 1. Retrieve Success Rates (Lambdas)
-            # These are samples of "Probability of measuring Correctly"
-            lam0_samples = self.post_marginals[q_key]['0']
-            lam1_samples = self.post_marginals[q_key]['1']
-            
-            if lam0_samples is None or lam1_samples is None:
-                print(f"Skipping Qubit {q}: Inference not complete.")
-                continue
+            Returns:
+                stats (dict): Dictionary containing mean, std, and 95% Confidence Intervals
+                            for both error_0 (p(1|0)) and error_1 (p(0|1)).
+            """
+            stats = {}
 
-            # 2. Convert to Error Rates (Epsilons)
-            # Error = 1 - Success
-            err0_samples = 1.0 - lam0_samples # Prob(Meas 1 | Prep 0)
-            err1_samples = 1.0 - lam1_samples # Prob(Meas 0 | Prep 1)
-            
-            # 3. Calculate Statistics
-            stats[q_key] = {
-                'err0_mean': np.mean(err0_samples),
-                'err0_std': np.std(err0_samples),
-                'err0_95_CI': np.percentile(err0_samples, [2.5, 97.5]),
+            es = [[0.0027,0.0072], [0.0035,0.0085]]
+            for q in self.qubit_order:
+                q_key = f'Qubit{q}'
                 
-                'err1_mean': np.mean(err1_samples),
-                'err1_std': np.std(err1_samples),
-                'err1_95_CI': np.percentile(err1_samples, [2.5, 97.5])
-            }
-            
-            # 4. Plotting (KDE + Histogram)
-            if plotting:
-                plt.figure(figsize=(8, 5), dpi=100)
+                # 1. Retrieve Success Rates (Lambdas)
+                # These are samples of "Probability of measuring Correctly"
+                lam0_samples = self.post_marginals[q_key]['0']
+                lam1_samples = self.post_marginals[q_key]['1']
                 
-                # Plot Error 0 (Readout error on |0>)
-                kde0 = ss.gaussian_kde(err0_samples)
-                x0 = np.linspace(min(err0_samples), max(err0_samples), 200)
-                plt.plot(x0, kde0(x0), color='blue', label=r'$P(1|0)$ (Error on 0)')
-                plt.fill_between(x0, kde0(x0), alpha=0.2, color='blue')
-                
-                # Plot Error 1 (Readout error on |1>)
-                kde1 = ss.gaussian_kde(err1_samples)
-                x1 = np.linspace(min(err1_samples), max(err1_samples), 200)
-                plt.plot(x1, kde1(x1), color='red', label=r'$P(0|1)$ (Error on 1)')
-                plt.fill_between(x1, kde1(x1), alpha=0.2, color='red')
-                
-                plt.title(f'Posterior Error Distributions - Qubit {q}')
-                plt.xlabel('Error Rate')
-                plt.ylabel('Density')
-                plt.legend()
-                plt.grid(True, alpha=0.3)
-                
-                if save_plots:
-                    plt.savefig(self.file_address + f'ErrorDist_Qubit{q}.pdf')
-                
-                plt.show()
-                
-                # Print Summary
-                print(f"--- Qubit {q} Summary ---")
-                print(f"Error on |0>: {stats[q_key]['err0_mean']:.4f} "
-                      f"(95% CI: {stats[q_key]['err0_95_CI'][0]:.4f} - {stats[q_key]['err0_95_CI'][1]:.4f})")
-                print(f"Error on |1>: {stats[q_key]['err1_mean']:.4f} "
-                      f"(95% CI: {stats[q_key]['err1_95_CI'][0]:.4f} - {stats[q_key]['err1_95_CI'][1]:.4f})")
-                print("-" * 30)
+                if lam0_samples is None or lam1_samples is None:
+                    print(f"Skipping Qubit {q}: Inference not complete.")
+                    continue
 
-        return stats
+                # 2. Convert to Error Rates (Epsilons)
+                # Error = 1 - Success
+                err0_samples = 1.0 - lam0_samples # Prob(Meas 1 | Prep 0)
+                err1_samples = 1.0 - lam1_samples # Prob(Meas 0 | Prep 1)
+                
+                # 3. Calculate Statistics
+                stats[q_key] = {
+                    'err0_mean': np.mean(err0_samples),
+                    'err0_std': np.std(err0_samples),
+                    'err0_95_CI': np.percentile(err0_samples, [2.5, 97.5]),
+                    
+                    'err1_mean': np.mean(err1_samples),
+                    'err1_std': np.std(err1_samples),
+                    'err1_95_CI': np.percentile(err1_samples, [2.5, 97.5])
+                }
+                
+                # 4. Plotting (KDE + Histogram)
+                if plotting:
+                    plt.figure(figsize=(8, 5), dpi=100)
+                    
+                    # Plot Error 0 (Readout error on |0>)
+                    kde0 = ss.gaussian_kde(err0_samples)
+                    x0 = np.linspace(min(err0_samples), max(err0_samples), 200)
+                    plt.plot(x0, kde0(x0), color='blue', label=r'$P(1|0)$ (Error on 0)')
+                    plt.axvline(x=es[q][0], color='blue', linestyle='dashed', label='Typical Error on 0')
+                    plt.fill_between(x0, kde0(x0), alpha=0.2, color='blue')
+                    
+                    # Plot Error 1 (Readout error on |1>)
+                    kde1 = ss.gaussian_kde(err1_samples)
+                    x1 = np.linspace(min(err1_samples), max(err1_samples), 200)
+                    plt.plot(x1, kde1(x1), color='red', label=r'$P(0|1)$ (Error on 1)')
+                    plt.axvline(x=es[q][1], color='red', linestyle='dashed', label='Typical Error on 1')
+                    plt.fill_between(x1, kde1(x1), alpha=0.2, color='red')
+                    
+                    plt.title(f'Posterior Error Distributions - Qubit {q}')
+                    plt.xlabel('Error Rate')
+                    plt.ylabel('Density')
+                    plt.legend()
+                    plt.grid(True, alpha=0.3)
+                    
+                    if save_plots:
+                        plt.savefig(self.file_address + f'ErrorDist_Qubit{q}.pdf')
+                    
+                    plt.show()
+                    
+                    # Print Summary
+                    print(f"--- Qubit {q} Summary ---")
+                    print(f"Error on |0>: {stats[q_key]['err0_mean']:.4f} "
+                        f"(95% CI: {stats[q_key]['err0_95_CI'][0]:.4f} - {stats[q_key]['err0_95_CI'][1]:.4f})")
+                    print(f"Error on |1>: {stats[q_key]['err1_mean']:.4f} "
+                        f"(95% CI: {stats[q_key]['err1_95_CI'][0]:.4f} - {stats[q_key]['err1_95_CI'][1]:.4f})")
+                    print("-" * 30)
+
+            return stats
