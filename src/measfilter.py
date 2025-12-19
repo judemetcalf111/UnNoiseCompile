@@ -986,7 +986,6 @@ class SplitMeasFilter:
                   Priod_sd=0.1,
                   seed=227,
                   shots_per_point=1024,
-                  show_denoised=False,
                   prep_state='0'):
         """
           Do Bayesian interence
@@ -1070,7 +1069,6 @@ class SplitMeasFilter:
                 self.params,
                 Priod_sd,
                 seed=seed,
-                show_denoised=show_denoised,
                 file_address=state_prefix,
                 prep_state=prep_state)
             
@@ -1080,10 +1078,10 @@ class SplitMeasFilter:
             
             if prep_state == '0':
                 # 0 error rate
-                self.post_marginals[f'Qubit{i}']['0'] = post_lambdas[:, 0]
+                self.post_marginals[f'Qubit{i}']['0'] = post_lambdas
             elif prep_state == '1':
                 # 1 error rate
-                self.post_marginals[f'Qubit{i}']['1'] = post_lambdas[:, 1]
+                self.post_marginals[f'Qubit{i}']['1'] = post_lambdas
                 
         # Check if we can build the full matrix (only if we have both 0 and 1 data)
         first_q = f'Qubit{self.qubit_order[0]}'
