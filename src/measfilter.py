@@ -541,6 +541,42 @@ def vecToDict_inv(nQubits, shots, vec):
         counts[key] = int(vec[i] * shots)
     return counts
 
+def dict_filter(data_dict, percent=99):
+        """
+        Filters a dictionary to retain entries that make up the top x% of total counts, the default set to 99%.
+
+        Args:
+            data_dict (dict): The input dictionary with counts.
+            percent (float): The percentage (0-100) threshold to retain (default is 99).
+
+        Returns:
+            dict: A new dictionary containing only the top 99% of entries.
+        """
+        total_sum = sum(data_dict.values())
+        if total_sum == 0:
+            return {}, 0
+
+        # Sort descending
+        sorted_items = sorted(data_dict.items(), key=lambda item: item[1], reverse=True)
+
+        filtered_dict = {}
+        cumulative_sum = 0
+        # Smart way to ensure the correct percentage scale (0.99 vs 99)
+        # Shouldn't have to think about it, but still!! Cool!!!
+        if percent > 1.0: 
+            percent = percent / 100.0
+        
+        threshold = percent * total_sum
+
+        for key, value in sorted_items:
+            if cumulative_sum < threshold:
+                filtered_dict[key] = value
+                cumulative_sum += value
+            else:
+                break
+                
+        return filtered_dict
+
 
 # Functions
 def getData0(data, num_group, interested_qubit):
@@ -609,42 +645,6 @@ def errMitMat(lambdas_sample):
     A = np.array([[pm0p0, 1 - pm1p1], [1 - pm0p0, pm1p1]])
     return (A)
 
-
-def err2MitMat(lambdas_sample):
-    """
-    Compute the matrix A from
-    Ax = b, where A is the error mitigation matrix (transition matrix),
-    x is the number appearence of a basis in theory
-    b is the number appearence of a basis in practice with noise
-
-    Parameters
-    ----------
-    lambdas_sample : numpy array
-        entries should be 
-        Pr(Measuring first 0|Preparing first 0), Pr(Measuring first 1|Preparing first 1), Pr(Measuring second 0|Preparing second 0), Pr(Measuring second 1|Preparing second 1)
-
-    Returns
-    -------
-    A : numpy array
-        Transition matrix that applies classical measurement error.
-
-    """
-    #
-    # Input; lambdas_sample - np.array, array of (1 - error rate) whose length is number of qubits
-    # Output; A - np.ndarray, as described above
-    pm0xp0x = lambdas_sample[0]
-    pm1xp1x = lambdas_sample[1]
-    pmx0px0 = lambdas_sample[2]
-    pmx1px1 = lambdas_sample[3]
-    
-    # Initialize the matrix
-
-    A = np.array( [ [pm0xp0x * pmx0px0, pm0xp0x * (1-pmx1px1),  (1-pm1xp1x) * pmx0px0,  (1-pm1xp1x) * (1-pmx1px1)],
-                    [pm0xp0x * (1-pmx0px0), pm0xp0x * pmx1px1,  (1-pm1xp1x) * (1-pmx0px0),  (1-pm1xp1x) * pmx1px1],
-                    [(1-pm0xp0x) * pmx0px0, (1-pm0xp0x) * (1-pmx1px1),  pm1xp1x * pmx0px0,  pm1xp1x * (1-pmx1px1)],
-                    [(1-pm0xp0x) * (1-pmx0px0), (1-pm0xp0x) * pmx1px1,  pm1xp1x * (1-pmx0px0),  pm1xp1x * pmx1px1]])
-                  
-    return (A)
 
 def QoI(prior_lambdas, prep_state='0'):
     """
@@ -1199,6 +1199,75 @@ class SplitMeasFilter:
 
     def filter_mode(self, counts):
         return self._apply_tensor_inversion(counts, self.inv_matrices_mode)
+    
+    def get_inverse_element(self, target_bitstring, source_bitstring):
+        """
+        Calculates the probability transition factor from Source (Noisy) -> Target (Clean).
+        Mathematically: returns the element (Row=Target, Col=Source) of the Inverse Matrix.
+        
+        Args:
+            target_bitstring (str): The 'clean' state we are calculating probability for.
+            source_bitstring (str): The 'noisy' state we actually measured.
+        """
+        # Ensure we have the matrices
+        if self.inv_matrices_mean is None:
+            self.create_filter_mat()
+            
+        probability_factor = 1.0
+        
+        # Iterate through qubits to multiply local probabilities
+        # We assume Little Endian (Qubit 0 is right-most character)
+        for i, q in enumerate(self.qubit_order):
+            # Parse the specific bit for this qubit from the strings
+            # String index must be reversed: string[-1] is Qubit 0
+            t_val = int(target_bitstring[-(i+1)]) # Row Index (Clean)
+            s_val = int(source_bitstring[-(i+1)]) # Col Index (Noisy)
+            
+            # Retrieve the specific value from the 2x2 inverse matrix
+            # inv_matrices_mean is a list of 2x2 matrices for [q0, q1, ...]
+            # We must access the matrix corresponding to 'i' (the current qubit loop index)
+            elem = self.inv_matrices_mean[i][t_val, s_val]
+            
+            probability_factor *= elem
+            
+        return probability_factor
+    
+    def get_forward_element(self, observed_bitstring, hidden_bitstring):
+        """
+        Calculates P(Observed | Hidden).
+        Used for the forward pass of Gradient Descent.
+        Very similar to get_inverse_element, but uses the forward error model.
+        """
+        # Ensure marginals are available
+        if not hasattr(self, 'post_marginals'):
+            raise RuntimeError("Filter not calibrated. Run inference() first.")
+
+        prob = 1.0
+        # Iterate qubits (Little Endian: String[-1] is Qubit 0)
+        for i, q in enumerate(self.qubit_order):
+            obs_bit = int(observed_bitstring[-(i+1)]) # Row Index
+            hid_bit = int(hidden_bitstring[-(i+1)])   # Col Index
+            
+            q_key = f'Qubit{q}'
+            
+            # Retrieve single-qubit error rates from calibration
+            # P(Meas 0 | Prep 0) = Mean of Post Lambda 0
+            p0_g_0 = np.mean(self.post_marginals[q_key]['0'])
+            # P(Meas 1 | Prep 1) = Mean of Post Lambda 1
+            p1_g_1 = np.mean(self.post_marginals[q_key]['1'])
+            
+            # Build the 2x2 Forward Error Matrix for this qubit
+            # M = [[P(0|0), P(0|1)], 
+            #      [P(1|0), P(1|1)]]
+            m_single = np.array([
+                [p0_g_0,     1 - p1_g_1],
+                [1 - p0_g_0, p1_g_1]
+            ])
+            
+            prob *= m_single[obs_bit, hid_bit]
+            
+        return prob
+    
 
     def error_distributions(self, plotting=True, save_plots=False):
             """
@@ -1211,7 +1280,6 @@ class SplitMeasFilter:
             """
             stats = {}
 
-            es = [[0.0027,0.0072], [0.0035,0.0085]]
             for q in self.qubit_order:
                 q_key = f'Qubit{q}'
                 
@@ -1248,14 +1316,12 @@ class SplitMeasFilter:
                     kde0 = ss.gaussian_kde(err0_samples)
                     x0 = np.linspace(min(err0_samples), max(err0_samples), 200)
                     plt.plot(x0, kde0(x0), color='blue', label=r'$P(1|0)$ (Error on 0)')
-                    plt.axvline(x=es[q][0], color='blue', linestyle='dashed', label='Typical Error on 0')
                     plt.fill_between(x0, kde0(x0), alpha=0.2, color='blue')
                     
                     # Plot Error 1 (Readout error on |1>)
                     kde1 = ss.gaussian_kde(err1_samples)
                     x1 = np.linspace(min(err1_samples), max(err1_samples), 200)
                     plt.plot(x1, kde1(x1), color='red', label=r'$P(0|1)$ (Error on 1)')
-                    plt.axvline(x=es[q][1], color='red', linestyle='dashed', label='Typical Error on 1')
                     plt.fill_between(x1, kde1(x1), alpha=0.2, color='red')
                     
                     plt.title(f'Posterior Error Distributions - Qubit {q}')
