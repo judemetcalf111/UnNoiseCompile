@@ -4,9 +4,9 @@ Created on Thu Jul 16 18:19:38 2020
 
 @author: Muqing Zheng
 """
-# print("Formal Installation")
 # Qiskit
 from qiskit import QuantumCircuit, transpile
+from braket.aws import AwsDevice
 
 # Numerical/Stats pack
 import csv
@@ -16,13 +16,14 @@ import scipy.stats as ss
 import numpy.linalg as nl
 from math import pi
 # For optimization
-from cvxopt import matrix, solvers
-from scipy.optimize import minimize_scalar,minimize
-# For plot
-from qiskit import QuantumCircuit, transpile
-from braket.aws import AwsDevice
-
+from scipy.optimize import minimize
+# For plotting
 import matplotlib.pyplot as plt
+from aquarel import load_theme
+
+theme = load_theme("arctic_light")
+theme.apply()
+theme.apply_transforms()
 width = 6.72 # plot width
 height = 4.15 # plot height
 
@@ -709,18 +710,19 @@ def dq(x, qs_ker, d_ker):
 
 
 
-def findM(qs_ker, d_ker):
+def findM(qs_ker, d_ker, prep_state):
     """
-    Updated findM to restrict optimization bounds to the effective support
-    of the prior distribution, preventing edge explosions.
+    The function used to find the M that maximises the d/q ratio
     """
-    # 1. Scan the space to find where the prior actually exists
-    x_scan = np.linspace(0, 1, 1000)
+    # Scan the space to find where the prior actually exists
+    if prep_state == '0':
+        x_scan = np.linspace(0.95, 1, 1000)
+    elif prep_state == '1':
+        x_scan = np.linspace(0, 0.05, 1000)
     prior_density = qs_ker(x_scan)
     
-    # 2. Define Effective Support: 
+    # Define Effective Support: 
     # Only consider regions where prior density is at least 1% of its peak.
-    # This cuts off the unstable "tails" at 0 and 1.
     threshold = 0.01 * np.max(prior_density)
     valid_indices = np.where(prior_density > threshold)[0]
     
@@ -733,12 +735,11 @@ def findM(qs_ker, d_ker):
         # Fallback if density is flat or error
         bds = (0.2, 0.8) 
 
-    # --- Debugging Plot (Optional: Keep your plot to verify) ---
+    # --- Plot --------------------------------------------------
     ys = np.array([dq(x, qs_ker, d_ker) for x in x_scan])
     plt.figure(figsize=(width,height), dpi=100, facecolor='white')
     plt.plot(x_scan, ys)
-    plt.title("Objective Function with Edge Explosions")
-    plt.ylim(-50, 0) # Cap the view to see the middle trough
+    plt.title("-d/q ratio")
     plt.show()
     # -----------------------------------------------------------
 
@@ -841,7 +842,7 @@ def output(d,
 
     # Find the max ratio r(Q(lambda)) over a single lambda
 
-    max_r, max_q = findM(qs_ker, d_ker)
+    max_r, max_q = findM(qs_ker, d_ker, prep_state)
 
     # Print and Check
     print('Final Accepted Posterior Lambdas')
@@ -878,10 +879,10 @@ def output(d,
     else:
         print('Plotting full range for unknown prep_state, please supply prep_state "0" or "1".')
         xsd = xs
-        
+
     plt.figure(figsize=(6, 4), dpi=100, facecolor='white')
-    plt.plot(xsd, d_ker(xsd), 'r--', lw=2, label='Observed Data')
-    plt.plot(xsd, post_ker(xsd), 'b-', label='Posterior Model')
+    plt.plot(1-xsd, d_ker(xsd), 'r--', lw=2, label='Observed Data')
+    plt.plot(1-xsd, post_ker(xsd), 'b-', label='Posterior Model')
     plt.xlabel('Average Qubit Value')
     plt.ylabel('Density')
     plt.title(f'Calibration Qubit {interested_qubit} |{prep_state}>')
@@ -932,17 +933,22 @@ class SplitMeasFilter:
         self.mat_mean = None
         self.mat_mode = None
 
-        # LOGIC FIX: Handle data loading gracefully
+        # Load Data
         if data is not None and len(data) > 0:
-            self.data = data
+            self.data = np.atleast_1d(data)
         else:
-            # Try to read from file, but default to empty if file doesn't exist yet
-            try:
-                self.data = read_filter_data(self.file_address)
-            except (FileNotFoundError, OSError):
-                # This is normal if we are just starting a new calibration
-                self.data = np.array([])
+            self.data = self._load_data_from_file()
             
+    def _load_data_from_file(self):
+        """Internal helper to load raw bitstrings safely."""
+        try:
+            # Use pandas for robust CSV reading (handles newlines/headers better)
+            path = self.file_address + 'Filter_data.csv'
+            df = pd.read_csv(path, header=None, dtype=str)
+            return df.values.flatten()
+        except (FileNotFoundError, pd.errors.EmptyDataError):
+            return np.array([])
+        
     def create_filter_mat(self):
         """
         Calculates and stores the 2x2 inverse matrices for each qubit individually.
