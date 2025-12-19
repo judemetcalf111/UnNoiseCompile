@@ -735,26 +735,33 @@ def findM(qs_ker, d_ker, prep_state):
         # Fallback if density is flat or error
         bds = (0.2, 0.8) 
 
-    # --- Plot --------------------------------------------------
-    ys = np.array([dq(x, qs_ker, d_ker) for x in x_scan])
-    plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-    plt.plot(x_scan, ys)
-    plt.title("-d/q ratio")
-    plt.show()
-    # -----------------------------------------------------------
-
     # Find a safe starting point (x0) inside the valid bounds
     # We look for the minimum of y only within our valid indices
+    ys = np.array([dq(x, qs_ker, d_ker) for x in x_scan])
     valid_ys = ys[valid_indices]
     valid_xs = x_scan[valid_indices]
     x0 = valid_xs[np.argmin(valid_ys)]
 
     # Run Optimizer with safe bounds
     res = minimize(dq, (x0,), args=(qs_ker, d_ker), bounds=(bds,), method='L-BFGS-B')
+
+    # --- Plot --------------------------------------------------
+    plt.figure(figsize=(width,height), dpi=100, facecolor='white')
+    plt.plot(1 - x_scan, ys, c = 'crimson', lw = 2, label = '-Data/Prior')
+    plt.xlabel("Qubit Value")
+    plt.ylabel("Relative Rate (-Data/Prior)")
+    plt.title("-Data/Prior PDFs Minimised for Efficient Inference")
+    # -----------------------------------------------------------
     
     try:
+        plt.axhline(res.fun[0], label = f'$\mu$ minimiser', c = 'purple')
+        plt.legend()
+        plt.show()
         return -res.fun[0], res.x[0]
     except Exception:
+        plt.axhline(res.fun, label = f'$\mu$ minimiser', c = 'purple')
+        plt.legend()
+        plt.show()
         return -res.fun, res.x
     
 def QoI_single(lambdas, prep_state='0'):
@@ -846,7 +853,7 @@ def output(d,
 
     # Print and Check
     print('Final Accepted Posterior Lambdas')
-    print('M: %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
+    print(f'$\mu$' + ': %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
           (max_r, max_q, d_ker(max_q), qs_ker(max_q)))
 
     post_lambdas = np.array([])
