@@ -222,10 +222,13 @@ def QoI_gate(prior_lambdas, ideal_p0, gate_num):
         qs = np.append(qs, M_meaerr[0])
     return qs
 
-def data_readout(datafile = None, data = None):
+def data_readout(qub_index, datafile = None, data = None):
     """
     Function to readout json files or suitable numpy arrays
     """
+
+    if type(qub_index) != int:
+        raise Exception("Must supply an index for the interested qubit in `data_readout()`") 
 
     if datafile.endswith('.json'):
         with open(str(datafile), 'r') as file:
@@ -237,13 +240,11 @@ def data_readout(datafile = None, data = None):
         epsilon10 = np.zeros(num_qubits)
         gate_epsilon = np.zeros(num_qubits)
 
-        for qub_ind,qub in enumerate(qubit_props):
-            e01 = qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
-            e10 = qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
-            gate_err = qubit_props[qub]['oneQubitFidelity'][0]['fidelity']
-            epsilon01[qub_ind] = e01
-            epsilon10[qub_ind] = e10
-            gate_epsilon[qub_ind] = gate_err
+        qub = qubit_props[qub_ind]
+        
+        epsilon01 = qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+        epsilon10 = qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+        gate_epsilon = qubit_props[qub]['oneQubitFidelity'][0]['fidelity']
         
     elif type(data) == np.ndarray:
         if data.shape[1] != 3:
