@@ -222,12 +222,12 @@ def QoI_gate(prior_lambdas, ideal_p0, gate_num):
         qs = np.append(qs, M_meaerr[0])
     return qs
 
-def data_readout(qub_index, datafile = None, data = None):
+def data_readout(qubit_index, datafile = None, data = None):
     """
     Function to readout json files or suitable numpy arrays
     """
 
-    if type(qub_index) != int:
+    if type(qubit_index) != int:
         raise Exception("Must supply an index for the interested qubit in `data_readout()`") 
 
     if datafile.endswith('.json'):
@@ -240,7 +240,7 @@ def data_readout(qub_index, datafile = None, data = None):
         epsilon10 = np.zeros(num_qubits)
         gate_epsilon = np.zeros(num_qubits)
 
-        qub = qubit_props[qub_ind]
+        qub = qubit_props[qubit_index]
         
         epsilon01 = qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
         epsilon10 = qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
@@ -250,9 +250,9 @@ def data_readout(qub_index, datafile = None, data = None):
         if data.shape[1] != 3:
             raise Exception("Warning: Data array shape does not match simulation setting!\nData shape: "
                     + str(data.shape) + "\nSimulation qubits: " + str(num_qubits))
-        epsilon01 = data[:,0].tolist()
-        epsilon10 = data[:,1].tolist()
-        gate_epsilon = data[:,2].tolist()
+        epsilon01 = data[qubit_index,0]
+        epsilon10 = data[qubit_index,1]
+        gate_epsilon = data[qubit_index,2]
 
     elif datafile is None and data is None:
         raise Exception("Error: No data or datafile provided for the `data_readout()`")
