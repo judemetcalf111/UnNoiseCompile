@@ -12,6 +12,7 @@ from qiskit import QuantumCircuit, transpile
 import csv
 import pandas as pd
 import numpy as np
+import json
 import scipy.stats as ss
 import numpy.linalg as nl
 # For optimization
@@ -221,6 +222,44 @@ def QoI_gate(prior_lambdas, ideal_p0, gate_num):
         qs = np.append(qs, M_meaerr[0])
     return qs
 
+def data_readout(datafile = None, data = None):
+    """
+    Function to readout json files or suitable numpy arrays
+    """
+
+    if datafile.endswith('.json'):
+        with open(str(datafile), 'r') as file:
+            data = json.load(file)
+        qubit_props = data['oneQubitProperties']
+        num_qubits = len(qubit_props)
+
+        epsilon01 = np.zeros(num_qubits)
+        epsilon10 = np.zeros(num_qubits)
+        gate_epsilon = np.zeros(num_qubits)
+
+        for qub_ind,qub in enumerate(qubit_props):
+            e01 = qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+            e10 = qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+            gate_err = qubit_props[qub]['oneQubitFidelity'][0]['fidelity']
+            epsilon01[qub_ind] = e01
+            epsilon10[qub_ind] = e10
+            gate_epsilon[qub_ind] = gate_err
+        
+    elif type(data) == np.ndarray:
+        if data.shape[1] != 3:
+            raise Exception("Warning: Data array shape does not match simulation setting!\nData shape: "
+                    + str(data.shape) + "\nSimulation qubits: " + str(num_qubits))
+        epsilon01 = data[:,0].tolist()
+        epsilon10 = data[:,1].tolist()
+        gate_epsilon = data[:,2].tolist()
+
+    elif datafile is None and data is None:
+        raise Exception("Error: No data or datafile provided for the `data_readout()`")
+    else:
+        raise Exception("Must either:\nsupply datafile as path string to a json data file, i.e. '../data/datafile.json'\nor supply a nx3 numpy array with 0 -> 1 errors, 1 -> 0 errors, and gate errors in each row (ONLY AVAILABLE FOR SINGLE QUBIT GATES)")
+
+    lambdas = np.array([epsilon01,epsilon10,gate_epsilon])
+    return lambdas
 
 # Used to call output, delete ideal_p0 parameter
 # WARNING: After 2021 Summer, 0.5*eps_in_code = eps_in_paper
@@ -232,9 +271,13 @@ def output_gate(d,
                 meas_sd,
                 gate_type,
                 gate_num,
+                datafile = None,
+                data = None,
                 seed=127,
                 file_address='',
-                write_data_for_SB=False):
+                meas_prior = None,
+                gate_prior = None,
+                prep_state = '0'):
     """
       The main function that do all Bayesian inferrence part
 
@@ -290,20 +333,28 @@ def output_gate(d,
         a is the number of posterior and m is the number of model parameters
 
     """
-
+    np.random.seed(seed)
     # Algorithm 1 of https://doi.org/10.1137/16M1087229
 
     average_lambdas = np.array([
         1 - params[interested_qubit].get('pm1p0', 0.05),
         1 - params[interested_qubit].get('pm0p1', 0.05)
     ])
-    if gate_type == 'X':
-        average_lambdas = np.append(average_lambdas,
-                                    2 * params[interested_qubit]['u3_error'])
-        if gate_num % 2:
-            ideal_p0 = 0
-        else:
-            ideal_p0 = 1
+
+    if datafile is not None:
+        data_readout(datafile=datafile)
+    elif data is not None:
+        data_readout(data=data)
+    else:
+        raise Exception("Must supply priors through either datafile as a directory string referring to a AWS Braket calibration .json or a nx3 numpy array")
+
+    # if gate_type == 'X':
+    #     average_lambdas = np.append(average_lambdas,
+    #                                 2 * params[interested_qubit]['u3_error'])
+    #     if gate_num % 2:
+    #         ideal_p0 = 0
+    #     else:
+    #         ideal_p0 = 1
     # elif gate_type == 'Y':
     #     average_lambdas = np.append(average_lambdas,
     #                                 2 * params[interested_qubit]['u3_error'])
@@ -315,8 +366,10 @@ def output_gate(d,
     #     average_lambdas = np.append(average_lambdas,
     #                                 2 * params[interested_qubit]['u1_error'])
     #     ideal_p0 = 0
-    else:
-        raise Exception('Only accept X gate now')
+    # elif gate_type == 'CZ':
+
+    # else:
+    #     raise Exception('Only accept X gate now')
 
     # write data for standard bayesian inference
     if write_data_for_SB:
