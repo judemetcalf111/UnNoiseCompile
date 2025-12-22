@@ -262,6 +262,23 @@ def data_readout(qubit_index, datafile = None, data = None):
     lambdas = np.array([epsilon01,epsilon10,gate_epsilon])
     return lambdas
 
+def make_prior_dist(data,N):
+    
+    from scipy.optimize import minimize
+
+    data_kde = ss.gaussian_kde(data)
+    res = -minimize(fun = -data_kde, x0 = [1], bounds=(0,1), method='L-BFGS-B')
+
+    samples = np.array([])
+
+    while len(samples) < N:
+        one_sample = np.random.random()
+        if np.random.random() < (data_kde(one_sample) / res.fun):
+            samples.append(one_sample)
+
+    return samples
+    
+
 # Used to call output, delete ideal_p0 parameter
 # WARNING: After 2021 Summer, 0.5*eps_in_code = eps_in_paper
 def output_gate(d,
@@ -276,9 +293,10 @@ def output_gate(d,
                 data = None,
                 seed=127,
                 file_address='',
-                meas_prior = None,
+                meas_prior_file = None,
                 gate_prior = None,
-                prep_state = '0'):
+                prep_state = '0',
+                informed_priors = True):
     """
       The main function that do all Bayesian inferrence part
 
@@ -337,55 +355,13 @@ def output_gate(d,
     np.random.seed(seed)
     # Algorithm 1 of https://doi.org/10.1137/16M1087229
 
-    average_lambdas = np.array([
-        1 - params[interested_qubit].get('pm1p0', 0.05),
-        1 - params[interested_qubit].get('pm0p1', 0.05)
-    ])
-
     if datafile is not None:
-        data_readout(datafile=datafile)
+        average_lambdas = data_readout(qubit_index = interested_qubit,datafile=datafile)
     elif data is not None:
-        data_readout(data=data)
+        average_lambdas = data_readout(qubit_index = average_lambdas,data=data)
     else:
         raise Exception("Must supply priors through either datafile as a directory string referring to a AWS Braket calibration .json or a nx3 numpy array")
 
-    # if gate_type == 'X':
-    #     average_lambdas = np.append(average_lambdas,
-    #                                 2 * params[interested_qubit]['u3_error'])
-    #     if gate_num % 2:
-    #         ideal_p0 = 0
-    #     else:
-    #         ideal_p0 = 1
-    # elif gate_type == 'Y':
-    #     average_lambdas = np.append(average_lambdas,
-    #                                 2 * params[interested_qubit]['u3_error'])
-    #     if gate_num % 2:
-    #         ideal_p0 = 0
-    #     else:
-    #         ideal_p0 = 1
-    # elif gate_type == 'Z':
-    #     average_lambdas = np.append(average_lambdas,
-    #                                 2 * params[interested_qubit]['u1_error'])
-    #     ideal_p0 = 0
-    # elif gate_type == 'CZ':
-
-    # else:
-    #     raise Exception('Only accept X gate now')
-
-    # write data for standard bayesian inference
-    if write_data_for_SB:
-        with open(file_address + 'Qubit{}.csv'.format(interested_qubit),
-                  mode='w',
-                  newline='') as sgr:
-            read_writer = csv.writer(sgr,
-                                     delimiter=',',
-                                     quotechar='"',
-                                     quoting=csv.QUOTE_MINIMAL)
-            read_writer.writerow(['x', 'y'])
-            for i in range(len(d)):
-                read_writer.writerow([ideal_p0, d[i]])
-
-    np.random.seed(seed)
     num_lambdas = 3
     # Get distribution of data (Gaussian KDE)
     d_ker = ss.gaussian_kde(d)  # i.e., pi_D^{obs}(q), q = Q(lambda)
@@ -397,7 +373,13 @@ def output_gate(d,
 
     # Sample prior lambdas, assume prior distribution is Normal distribution with mean as the given probality from IBM
     # Absolute value is used here to avoid negative values, so it is little twisted, may consider Gamma Distribution
-    prior_lambdas = np.zeros(M * num_lambdas).reshape((M, num_lambdas))
+    
+    if (informed_priors == True) and (meas_prior_file != None):
+        priors01 = np.txtread(meas_prior_file + f'State0_Post_Qubit{interested_qubit}.csv')
+        priors10 = np.txtread(meas_prior_file + f'State1_Post_Qubit{interested_qubit}.csv')
+        
+
+        prior_lambdas = np.zeros(M * num_lambdas).reshape((M, num_lambdas))
 
     for i in range(M):
         one_sample = np.zeros(num_lambdas)
@@ -411,6 +393,8 @@ def output_gate(d,
                 # while one_sample[j]<= 0 or one_sample[j] > 1:
                 #     one_sample[j] = np.random.normal(average_lambdas[j],gate_sd,1)
         prior_lambdas[i] = one_sample
+
+    prior_lambdas = 
 
     # Produce prior QoI
     qs = QoI_gate(prior_lambdas, ideal_p0, gate_num)
