@@ -377,7 +377,7 @@ def output_gate(d,
     if (informed_priors == True) and (meas_prior_file != None):
         priors01 = np.txtread(meas_prior_file + f'State0_Post_Qubit{interested_qubit}.csv')
         priors10 = np.txtread(meas_prior_file + f'State1_Post_Qubit{interested_qubit}.csv')
-        
+        new_priors
 
         prior_lambdas = np.zeros(M * num_lambdas).reshape((M, num_lambdas))
 
