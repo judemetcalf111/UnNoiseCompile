@@ -222,7 +222,7 @@ def QoI_gate(prior_lambdas, ideal_p0, gate_num):
         qs = np.append(qs, M_meaerr[0])
     return qs
 
-def data_readout(qubit_index, datafile = None, data = None):
+def data_readout(qubit_index, datafile: str = '', data: np.ndarray = np.array([])):
     """
     Function to readout json files or suitable numpy arrays
     """
@@ -249,12 +249,12 @@ def data_readout(qubit_index, datafile = None, data = None):
     elif type(data) == np.ndarray:
         if data.shape[1] != 3:
             raise Exception("Warning: Data array shape does not match simulation setting!\nData shape: "
-                    + str(data.shape) + "\nSimulation qubits: " + str(num_qubits))
+                    + str(data.shape))
         epsilon01 = data[qubit_index,0]
         epsilon10 = data[qubit_index,1]
         gate_epsilon = data[qubit_index,2]
 
-    elif datafile is None and data is None:
+    elif not (datafile or data):
         raise Exception("Error: No data or datafile provided for the `data_readout()`")
     else:
         raise Exception("Must either:\nsupply datafile as path string to a json data file, i.e. '../data/datafile.json'\nor supply a nx3 numpy array with 0 -> 1 errors, 1 -> 0 errors, and gate errors in each row (ONLY AVAILABLE FOR SINGLE QUBIT GATES)")
@@ -355,10 +355,13 @@ def output_gate(d,
     np.random.seed(seed)
     # Algorithm 1 of https://doi.org/10.1137/16M1087229
 
+    # Reading out the datafile/data through data_readout should give the array [error_01,error_10,err_gate]
+    # The standard workflow here is to measure the error_01 and error_10 in other measurements, and then to
+    # construct informative priors using empirical bitflip experiments. The gate calibration error is, however, important!
     if datafile is not None:
-        average_lambdas = data_readout(qubit_index = interested_qubit,datafile=datafile)
+        calibration_lambda = data_readout(qubit_index = interested_qubit,datafile=datafile)
     elif data is not None:
-        average_lambdas = data_readout(qubit_index = average_lambdas,data=data)
+        calibration_lambda = data_readout(qubit_index = interested_qubit,data=data)
     else:
         raise Exception("Must supply priors through either datafile as a directory string referring to a AWS Braket calibration .json or a nx3 numpy array")
 
@@ -366,20 +369,25 @@ def output_gate(d,
     # Get distribution of data (Gaussian KDE)
     d_ker = ss.gaussian_kde(d)  # i.e., pi_D^{obs}(q), q = Q(lambda)
 
-    if average_lambdas[0] == 1 or average_lambdas[0] < 0.7:
-        average_lambdas[0] = 0.9
-    if average_lambdas[1] == 1 or average_lambdas[1] < 0.7:
-        average_lambdas[1] = 0.9
+    if calibration_lambda[0] == 1 or calibration_lambda[0] < 0.7:
+        calibration_lambda[0] = 0.9
+    if calibration_lambda[1] == 1 or calibration_lambda[1] < 0.7:
+        calibration_lambda[1] = 0.9
 
     # Sample prior lambdas, assume prior distribution is Normal distribution with mean as the given probality from IBM
     # Absolute value is used here to avoid negative values, so it is little twisted, may consider Gamma Distribution
     
     if (informed_priors == True) and (meas_prior_file != None):
-        priors01 = np.txtread(meas_prior_file + f'State0_Post_Qubit{interested_qubit}.csv')
-        priors10 = np.txtread(meas_prior_file + f'State1_Post_Qubit{interested_qubit}.csv')
-        new_priors
+        priors01 = np.loadtxt(meas_prior_file + f'State0_Post_Qubit{interested_qubit}.csv')
+        priors10 = np.loadtxt(meas_prior_file + f'State1_Post_Qubit{interested_qubit}.csv')
+        kde01 = ss.gaussian_kde(priors01)
+        kde10 = ss.gaussian_kde(priors10)
 
-        prior_lambdas = np.zeros(M * num_lambdas).reshape((M, num_lambdas))
+        new_prior01 = kde01.resample(M,seed)
+        new_prior10 = kde10.resample(M,seed)
+
+        # prior_lambdas = np.zeros(M * num_lambdas).reshape((M, num_lambdas))
+        prior_lambdas = np.array([new_prior01,new_prior10])
 
     for i in range(M):
         one_sample = np.zeros(num_lambdas)
