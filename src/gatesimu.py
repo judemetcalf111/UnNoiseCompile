@@ -380,6 +380,8 @@ def output_gate(d,
     if (informed_priors == True) and (meas_prior_file != None):
         priors01 = np.loadtxt(meas_prior_file + f'State0_Post_Qubit{interested_qubit}.csv')
         priors10 = np.loadtxt(meas_prior_file + f'State1_Post_Qubit{interested_qubit}.csv')
+        calib_gate_mean = calibration_lambda[2]                                             # vendor gate error calibration
+
         kde01 = ss.gaussian_kde(priors01)
         kde10 = ss.gaussian_kde(priors10)
 
@@ -391,13 +393,14 @@ def output_gate(d,
 
     for i in range(M):
         one_sample = np.zeros(num_lambdas)
+        prior_lambdas = np.zeros(num_lambdas)
         for j in range(num_lambdas):
             if j < 2:
-                one_sample[j] = tnorm01(average_lambdas[j], meas_sd)
+                one_sample[j] = tnorm01(calibration_lambda[j], meas_sd)
                 # while one_sample[j]<= 0 or one_sample[j] > 1:
                 #     one_sample[j] = np.random.normal(average_lambdas[j],meas_sd,1)
             else:
-                one_sample[j] = tnorm01(average_lambdas[j], gate_sd)
+                one_sample[j] = tnorm01(calibration_lambda[j], gate_sd)
                 # while one_sample[j]<= 0 or one_sample[j] > 1:
                 #     one_sample[j] = np.random.normal(average_lambdas[j],gate_sd,1)
         prior_lambdas[i] = one_sample
