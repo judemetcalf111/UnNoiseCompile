@@ -199,21 +199,25 @@ def QoI_gate(prior_lambdas, gate_type, gate_num):
     # Initialize the output array
     qs = np.array([], dtype=np.float64)
 
-    if (gate_type == 'X') or (gate_type == 'RX'):
+    gates = ['RY','RX','RZ','CZ']
+    if (gate_type == 'X') or (gate_type == 'RX') or (gate_type == 'CZ') or (gate_type == 'RY'):
         if (gate_num % 2 == 0):
             ideal_p0 = 1
         elif (gate_num % 2 == 1):
             ideal_p0 = 0
-
+    elif gate_type == 'RZ':
+        ideal_p0 = 1
+    else:
+        raise Exception(f"Gate Type {gate_type} not recognised")
     # Assuming independance
-    
+
     for i in range(shape[0]):
         ep = prior_lambdas[i][2]
 
         if ideal_p0 == 0:
             noisy_p0 = (1 - ((1 - (2 * ep)) ** gate_num)) / 2
             noisy_p1 = 1 - noisy_p0
-        elif ideal_p0 ==1:
+        elif ideal_p0 == 1:
             noisy_p0 = (1 + ((1 - (2 * ep)) ** gate_num)) / 2
             noisy_p1 = 1 - noisy_p0
         else:
