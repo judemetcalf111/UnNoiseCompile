@@ -199,18 +199,21 @@ def QoI_gate(prior_lambdas, gate_type, gate_num):
     # Initialize the output array
     qs = np.array([], dtype=np.float64)
 
-    # Smiluate measurement error, assume independence
-    p0 = ideal_p0
-    p1 = 1 - p0
+    if (gate_type == 'X') or (gate_type == 'RX'):
+        if (gate_num % 2 == 0):
+            ideal_p0 = 1
+        elif (gate_num % 2 == 1):
+            ideal_p0 = 0
 
-
+    # Assuming independance
+    
     for i in range(shape[0]):
         ep = prior_lambdas[i][2]
 
-        if p0 == 0:
+        if ideal_p0 == 0:
             noisy_p0 = (1 - ((1 - (2 * ep)) ** gate_num)) / 2
             noisy_p1 = 1 - noisy_p0
-        elif p0 ==1:
+        elif ideal_p0 ==1:
             noisy_p0 = (1 + ((1 - (2 * ep)) ** gate_num)) / 2
             noisy_p1 = 1 - noisy_p0
         else:
