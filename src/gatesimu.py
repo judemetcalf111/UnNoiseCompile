@@ -200,6 +200,7 @@ def QoI_gate(prior_lambdas, gate_type, gate_num):
     qs = np.array([], dtype=np.float64)
 
     gates = ['RY','RX','RZ','CZ']
+    ideal_p0 = None
     if (gate_type == 'X') or (gate_type == 'RX') or (gate_type == 'CZ') or (gate_type == 'RY'):
         if (gate_num % 2 == 0):
             ideal_p0 = 1
@@ -208,7 +209,7 @@ def QoI_gate(prior_lambdas, gate_type, gate_num):
     elif gate_type == 'RZ':
         ideal_p0 = 1
     else:
-        raise Exception(f"Gate Type {gate_type} not recognised")
+        raise Exception(f"Gate Type {gate_type} not recognised, recognised gates are: {gates}")
     # Assuming independance
 
     for i in range(shape[0]):
