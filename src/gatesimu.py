@@ -173,7 +173,7 @@ def Gateexp(nGates,
         print(f"Failed to process/save results: {e}")
 
 # used to call QoI
-def QoI_gate(prior_lambdas, ideal_p0, gate_num):
+def QoI_gate(prior_lambdas, gate_type, gate_num):
     """
     Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
 
@@ -195,7 +195,6 @@ def QoI_gate(prior_lambdas, ideal_p0, gate_num):
 
     """
     shape = prior_lambdas.shape
-    nQubit = 1
 
     # Initialize the output array
     qs = np.array([], dtype=np.float64)
@@ -203,16 +202,20 @@ def QoI_gate(prior_lambdas, ideal_p0, gate_num):
     # Smiluate measurement error, assume independence
     p0 = ideal_p0
     p1 = 1 - p0
-    # Compute Fourier coefficient
-    phat0 = 1 / 2 * (p0 * (-1)**(0 * 0) + p1 * (-1)**(0 * 1))
-    phat1 = 1 / 2 * (p0 * (-1)**(1 * 0) + p1 * (-1)**(1 * 1))
+
 
     for i in range(shape[0]):
-        eps = prior_lambdas[i][2]
-        noisy_p0 = ((1 - eps)**(0))**gate_num * phat0 * (-1)**(0 * 0) + (
-            (1 - eps)**(1))**gate_num * phat1 * (-1)**(1 * 0)
-        noisy_p1 = ((1 - eps)**(0))**gate_num * phat0 * (-1)**(0 * 1) + (
-            (1 - eps)**(1))**gate_num * phat1 * (-1)**(1 * 1)
+        ep = prior_lambdas[i][2]
+
+        if p0 == 0:
+            noisy_p0 = (1 - ((1 - (2 * ep)) ** gate_num)) / 2
+            noisy_p1 = 1 - noisy_p0
+        elif p0 ==1:
+            noisy_p0 = (1 + ((1 - (2 * ep)) ** gate_num)) / 2
+            noisy_p1 = 1 - noisy_p0
+        else:
+            raise Exception("p0 was neither a '0' value or a '1' value. There should only be native gates in the circuit.")
+
         M_ideal = np.array([noisy_p0, noisy_p1])
 
         A = errMitMat(prior_lambdas[i])
@@ -261,22 +264,6 @@ def data_readout(qubit_index, datafile: str = '', data: np.ndarray = np.array([]
 
     lambdas = np.array([epsilon01,epsilon10,gate_epsilon])
     return lambdas
-
-def make_prior_dist(data,N):
-    
-    from scipy.optimize import minimize
-
-    data_kde = ss.gaussian_kde(data)
-    res = -minimize(fun = -data_kde, x0 = [1], bounds=(0,1), method='L-BFGS-B')
-
-    samples = np.array([])
-
-    while len(samples) < N:
-        one_sample = np.random.random()
-        if np.random.random() < (data_kde(one_sample) / res.fun):
-            samples.append(one_sample)
-
-    return samples
     
 
 # Used to call output, delete ideal_p0 parameter
@@ -353,7 +340,6 @@ def output_gate(d,
 
     """
     np.random.seed(seed)
-    # Algorithm 1 of https://doi.org/10.1137/16M1087229
 
     # Reading out the datafile/data through data_readout should give the array [error_01,error_10,err_gate]
     # The standard workflow here is to measure the error_01 and error_10 in other measurements, and then to
@@ -387,9 +373,12 @@ def output_gate(d,
 
         new_prior01 = kde01.resample(M,seed)
         new_prior10 = kde10.resample(M,seed)
+        gate_lambdas = np.zeros(M)
+        for ind in range(M):
+            gate_lambdas[ind] = tnorm01(calib_gate_mean, gate_sd)
 
         # prior_lambdas = np.zeros(M * num_lambdas).reshape((M, num_lambdas))
-        prior_lambdas = np.array([new_prior01,new_prior10])
+        prior_lambdas = np.array([new_prior01,new_prior10,gate_lambdas])
 
     for i in range(M):
         one_sample = np.zeros(num_lambdas)
@@ -405,10 +394,8 @@ def output_gate(d,
                 #     one_sample[j] = np.random.normal(average_lambdas[j],gate_sd,1)
         prior_lambdas[i] = one_sample
 
-    prior_lambdas = 
-
     # Produce prior QoI
-    qs = QoI_gate(prior_lambdas, ideal_p0, gate_num)
+    qs = QoI_gate(prior_lambdas, gate_type, gate_num)
     #print(qs)
     qs_ker = ss.gaussian_kde(qs)  # i.e., pi_D^{Q(prior)}(q), q = Q(lambda)
 
