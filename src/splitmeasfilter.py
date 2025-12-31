@@ -764,12 +764,12 @@ def findM(qs_ker, d_ker, prep_state):
     # -----------------------------------------------------------
     
     try:
-        plt.axhline(res.fun[0], label = f'$\mu$ minimiser', c = 'purple')
+        plt.axhline(res.fun[0], label = r'$\mu$ minimiser', c = 'purple')
         plt.legend()
         plt.show()
         return -res.fun[0], res.x[0]
     except Exception:
-        plt.axhline(res.fun, label = f'$\mu$ minimiser', c = 'purple')
+        plt.axhline(res.fun, label = r'$\mu$ minimiser', c = 'purple')
         plt.legend()
         plt.show()
         return -res.fun, res.x
@@ -863,7 +863,7 @@ def output(d,
 
     # Print and Check
     print('Final Accepted Posterior Lambdas')
-    print(f'$\mu$' + ': %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
+    print(r'$\mu$' + f': %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
           (max_r, max_q, d_ker(max_q), qs_ker(max_q)))
 
     post_lambdas = np.array([])
