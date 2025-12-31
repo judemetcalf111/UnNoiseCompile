@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Jul 16 18:19:38 2020
+Created on Thu Dec 31 13:18:38 2025
 
-@author: Muqing Zheng
+@author: Jude Metcalf
 """
 # Qiskit
 from qiskit import QuantumCircuit, transpile
@@ -530,6 +530,16 @@ def vecToDict(nQubits, shots, vec):
         counts[key] = int(vec[i] * shots)
     return counts
 
+def safe_mean(data) -> float:
+    """
+    Safely compute the mean of a parameter, raising a type error if needed
+    """
+    if type(data) == list or type(data) == np.ndarray:
+        mean = float(np.mean(data))
+    else:
+        raise Exception(f'Input {data} is not of type "list" or "numpy.ndarray", instead it is of type {type(data)}')
+
+    return mean
 
 def vecToDict_inv(nQubits, shots, vec):
     """ 
@@ -972,8 +982,8 @@ class SplitMeasFilter:
             res_0 = self.post_marginals[q_key]['0']
             res_1 = self.post_marginals[q_key]['1']
             
-            lam0_mean = np.mean(res_0) # 1 - error_on_0
-            lam1_mean = np.mean(res_1) # 1 - error_on_1
+            lam0_mean = safe_mean(res_0) # 1 - error_on_0
+            lam1_mean = safe_mean(res_1) # 1 - error_on_1
             
             # Build scalable 2x2 A matrix and invert it
             A_mean = np.array([[lam0_mean, 1 - lam1_mean],
@@ -1142,8 +1152,10 @@ class SplitMeasFilter:
         for q in self.qubit_order:
             q_key = f'Qubit{q}'
             # Calculate mean of the valid columns
-            m0 = np.mean(self.post_marginals[q_key]['0'])
-            m1 = np.mean(self.post_marginals[q_key]['1'])
+
+            m0 = safe_mean(self.post_marginals[q_key]['0'])
+            m1 = safe_mean(self.post_marginals[q_key]['1'])
+
             res[q_key] = np.array([m0, m1])
         return res
 
@@ -1206,7 +1218,7 @@ class SplitMeasFilter:
             corrected_vec = corrected_vec / total_p
             
         return vecToDict(n, shots, corrected_vec)
-
+    
     def filter_mean(self, counts):
         return self._apply_tensor_inversion(counts, self.inv_matrices_mean)
 
@@ -1265,9 +1277,9 @@ class SplitMeasFilter:
             
             # Retrieve single-qubit error rates from calibration
             # P(Meas 0 | Prep 0) = Mean of Post Lambda 0
-            p0_g_0 = np.mean(self.post_marginals[q_key]['0'])
+            p0_g_0 = safe_mean(self.post_marginals[q_key]['0'])
             # P(Meas 1 | Prep 1) = Mean of Post Lambda 1
-            p1_g_1 = np.mean(self.post_marginals[q_key]['1'])
+            p1_g_1 = safe_mean(self.post_marginals[q_key]['1'])
             
             # Build the 2x2 Forward Error Matrix for this qubit
             # M = [[P(0|0), P(0|1)], 
