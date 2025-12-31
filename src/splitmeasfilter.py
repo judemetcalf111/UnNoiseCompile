@@ -628,35 +628,6 @@ def getData0(data, num_group, interested_qubit):
     return prob0
 
 
-def errMitMat(lambdas_sample):
-    """
-    Compute the matrix A from
-    Ax = b, where A is the error mitigation matrix (transition matrix),
-    x is the number appearence of a basis in theory
-    b is the number appearence of a basis in practice with noise
-
-    Parameters
-    ----------
-    lambdas_sample : numpy array
-        first two entry must be 
-        Pr(Measuring 0|Preparing 0) and Pr(Measuring 1|Preparing 1)
-
-    Returns
-    -------
-    A : numpy array
-        Transition matrix that applies classical measurement error.
-
-    """
-    #
-    # Input; lambdas_sample - np.array, array of (1 - error rate) whose length is number of qubits
-    # Output; A - np.ndarray, as described above
-    pm0p0 = lambdas_sample[0]
-    pm1p1 = lambdas_sample[1]
-    # Initialize the matrix
-    A = np.array([[pm0p0, 1 - pm1p1], [1 - pm0p0, pm1p1]])
-    return (A)
-
-
 def QoI(prior_lambdas, prep_state='0'):
     """
     Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
