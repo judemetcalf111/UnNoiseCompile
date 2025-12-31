@@ -542,7 +542,7 @@ def vecToDict_inv(nQubits, shots, vec):
         counts[key] = int(vec[i] * shots)
     return counts
 
-def dict_filter(data_dict, percent=99):
+def dict_filter(data_dict: dict[str, int], percent: float | int = 99.0) -> dict[str, int]:
         """
         Filters a dictionary to retain entries that make up the top x% of total counts, the default set to 99%.
 
@@ -555,7 +555,7 @@ def dict_filter(data_dict, percent=99):
         """
         total_sum = sum(data_dict.values())
         if total_sum == 0:
-            return {}, 0
+            return {}
 
         # Sort descending
         sorted_items = sorted(data_dict.items(), key=lambda item: item[1], reverse=True)
@@ -1281,6 +1281,145 @@ class SplitMeasFilter:
             
         return prob
     
+
+    def eff_DeNoise(self, datadict, percentage=100, verbose=True, GD = False, lr=0.1, max_iter=50):
+        """
+        Efficient DeNoiser function that applies the SplitMeasFilter to the provided data dictionary.
+        
+        Parameters:
+        - datadict: Dictionary containing measurement data.
+        - SplitMeasFilter: An instance of the SplitMeasFilter class with calibrated errors.
+        - percentage: percentage threshold for filtering (default is 99).
+        - verbose: If True, prints progress information.
+        - GD: If True, performs optional Gradient Descent refinement.
+        - lr: Learning rate for Gradient Descent (if GD is True).
+        - max_iter: Maximum number of iterations for Gradient Descent (if GD is True).
+        
+        Returns:
+        - denoised_data: Dictionary containing denoised measurement data.
+        """
+        
+        # We only sum over source bitstrings that are most computationally significant
+        # Defined from the `percentage` parameter.
+        important_dict = dict_filter(datadict, percent=percentage)
+        
+        input_len = len(important_dict)
+        # Defining our targets in a sparse approach, only those significant sources 
+        # of the bitstrings we actually saw will remain (noise won't make our output vanish completely!)
+        targets = list(important_dict.keys())
+        
+        denoised_data = {k: 0.0 for k in targets}
+        
+        # Sparse matrix mult (a (pretty unavoidable) double loop over sources and targets)
+        # Equation: P_denoised(target) = Sum_over_sources( M_inv[target, source] * P_noisy(source) )
+        
+        # Pre-calculate total shots for normalization later
+        filtered_shots = sum(important_dict.values())
+        
+        for t_str in targets:
+            new_prob = 0.0
+            for s_str, s_count in important_dict.items():
+                # Calculate probability of Source(s) flipping to Target(t)
+                # This is the "Likelihood of changing/remaining"
+                weight = self.get_inverse_element(t_str, s_str) # M_inv(target_bitstring=t_str, source_bitstring=s_str)
+                
+                # Add contribution: (Inverse Element) * (Observed Probability)
+                s_prob = s_count / filtered_shots
+                new_prob += weight * s_prob
+                
+            denoised_data[t_str] = new_prob
+
+        # Constrained optimisation using clipping, a good heuristic.
+        # We minimize ||Ap - p_tilde|| clipping to to p >= 0 and re-normalizing.
+        
+        final_data = {}
+        sum_p = 0.0
+        
+        for k, v in denoised_data.items():
+            if v > 1e-9: # Clip negatives and near-zeros
+                final_data[k] = v
+                sum_p += v
+                
+        # Re-normalize to ensure sum is 1.0 (or original shot count)
+        if sum_p > 0:
+            factor = filtered_shots / sum_p
+            final_data = {k: v * factor for k, v in final_data.items()}
+        
+        # -------------------------------------------------------------------------
+        # OPTIONAL: GRADIENT DESCENT REFINEMENT
+        # -------------------------------------------------------------------------
+        if GD:
+            if verbose: print(f"Analytic pass done. Starting Gradient Descent refinement...")
+            
+            n_dim = len(targets)
+            
+            # A. Vectorize Data
+            # 'y' = The actual noisy observations we want to match
+            p_noisy_obs = np.array([important_dict[t] for t in targets]) / filtered_shots
+            
+            # 'x' = Our initial guess (The result from the Analytic pass)
+            # Using the analytic result as a "warm start" makes GD extremely fast.
+            p_est = np.zeros(n_dim)
+            for i, t in enumerate(targets):
+                p_est[i] = final_data.get(t, 0.0) / filtered_shots
+            
+            # B. Build Forward Matrix M_sub for this subspace
+            # We need M (Forward), not M_inv, to calculate the Loss: || M*x - y ||^2
+            M_sub = np.zeros((n_dim, n_dim))
+            
+            for r, obs_bit in enumerate(targets):     # Row: Observed
+                for c, hid_bit in enumerate(targets): # Col: Hidden (Clean)
+                    M_sub[r, c] = self.get_forward_element(obs_bit, hid_bit)
+            
+            # C. Projected Gradient Descent Loop
+            for step in range(max_iter-1):
+                # Forward: p_pred = M * p_est
+                p_pred = M_sub @ p_est
+                
+                # Gradient of MSE: grad = M.T * (p_pred - p_obs)
+                diff = p_pred - p_noisy_obs
+                grad = M_sub.T @ diff
+                
+                # Update
+                p_est = p_est - lr * grad
+                
+                # Projection (Constraint: p >= 0 and sum(p) = 1)
+                p_est[p_est < 0] = 0 # Clip negatives
+                
+                curr_sum = np.sum(p_est)
+                if curr_sum > 0:
+                    p_est /= curr_sum # Normalize
+                
+                # Convergence Check (Small gradient magnitude)
+                if np.linalg.norm(lr * grad) < 1e-18:
+                    print(f"----  GD Converged after {step+1} steps!  ----")
+                    break
+
+                print(f"----  GD Step {step+1}/{max_iter} complete...  ----")
+            
+            # D. Update final_data with refined values
+            final_data = {}
+            for i, t in enumerate(targets):
+                if p_est[i] > 1e-9:
+                    final_data[t] = p_est[i] * filtered_shots # Scale back to counts
+        
+            if verbose:
+                print(f"Sparse DeNoising Complete. Gradient Descent Used")
+                print(f"Input Keys: {len(datadict)} -> Filtered Sources: {input_len} -> Output Targets: {len(final_data)}")
+                print(f"Total Shots (Input): {sum(datadict.values())} -> (Filtered): {filtered_shots} -> (Output): {sum(final_data.values())}")
+        else:
+            if verbose:
+                print(f"Sparse DeNoising Complete. No Gradient Descent included")
+                print(f"Input Keys: {len(datadict)} -> Filtered Sources: {input_len} -> Output Targets: {len(final_data)}")
+                print(f"Total Shots (Input): {sum(datadict.values())} -> (Filtered): {filtered_shots} -> (Output): {sum(final_data.values())}")
+
+
+        # -------------------------------------------------------------------------
+
+        final_data = {k: float(v) for k, v in final_data.items()} # np.float64 -> float
+
+        return final_data
+        
 
     def error_distributions(self, plotting=True, save_plots=False):
             """
