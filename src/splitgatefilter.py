@@ -18,10 +18,10 @@ import numpy.linalg as nl
 # For optimization
 from cvxopt import matrix, solvers
 
-import measfilter
+import splitmeasfilter
 import importlib
-importlib.reload(measfilter)
-from measfilter import *
+importlib.reload(splitmeasfilter)
+from splitmeasfilter import *
 # For plot
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import figure
@@ -173,7 +173,7 @@ def Gateexp(nGates,
         print(f"Failed to process/save results: {e}")
 
 # used to call QoI
-def QoI_gate(prior_lambdas, gate_type, gate_num):
+def QoI_gate(prior_lambdas: np.ndarray, gate_type, gate_num):
     """
     Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
 
@@ -194,13 +194,11 @@ def QoI_gate(prior_lambdas, gate_type, gate_num):
         prior lambdas in prior_lambdas.
 
     """
-    shape = prior_lambdas.shape
-
-    # Initialize the output array
-    qs = np.array([], dtype=np.float64)
-
-    gates = ['RY','RX','RZ','CZ']
+    num_samples = prior_lambdas.shape[0]
+    
+    gates = ['RY', 'RX', 'RZ', 'CZ']
     ideal_p0 = None
+    
     if (gate_type == 'X') or (gate_type == 'RX') or (gate_type == 'CZ') or (gate_type == 'RY'):
         if (gate_num % 2 == 0):
             ideal_p0 = 1
@@ -210,27 +208,47 @@ def QoI_gate(prior_lambdas, gate_type, gate_num):
         ideal_p0 = 1
     else:
         raise Exception(f"Gate Type {gate_type} not recognised, recognised gates are: {gates}")
-    # Assuming independance
 
-    for i in range(shape[0]):
-        ep = prior_lambdas[i][2]
+    # We extract the gate error column (index 2)
+    ep = prior_lambdas[:, 2]
+    
+    # Calculate noisy_p0 for all samples at once using vectorised numpy array arithmetic
+    # Formula: p(cumulative flip) = (1 +/- (1-2e)^N)/2
+    decay_factor = (1 - (2 * ep)) ** gate_num
 
-        if ideal_p0 == 0:
-            noisy_p0 = (1 - ((1 - (2 * ep)) ** gate_num)) / 2
-            noisy_p1 = 1 - noisy_p0
-        elif ideal_p0 == 1:
-            noisy_p0 = (1 + ((1 - (2 * ep)) ** gate_num)) / 2
-            noisy_p1 = 1 - noisy_p0
-        else:
-            raise Exception("p0 was neither a '0' value or a '1' value. There should only be native gates in the circuit.")
+    if ideal_p0 == 0:
+        noisy_p0 = (1 - decay_factor) / 2
+    elif ideal_p0 == 1:
+        noisy_p0 = (1 + decay_factor) / 2
+    else:
+        raise Exception("p0 was neither a '0' value or a '1' value. There should only be native gates in the circuit.")
 
-        M_ideal = np.array([noisy_p0, noisy_p1])
+        
+    noisy_p1 = 1 - noisy_p0
 
-        A = errMitMat(prior_lambdas[i])
-        M_meaerr = np.dot(A, M_ideal)
+    # Stack into shape (N, 2, 1) -> [[p0], [p1]] for efficient matrix multiplication
+    M_ideal = np.stack([noisy_p0, noisy_p1], axis=1)[..., np.newaxis]
 
-        # Only record interested qubits
-        qs = np.append(qs, M_meaerr[0])
+    # Vectorised in place of previous errMitMat
+
+    pm0p0 = prior_lambdas[:, 0]
+    pm1p1 = prior_lambdas[:, 1]
+
+    A_batch = np.zeros((num_samples, 2, 2))
+
+    # Row 0
+    A_batch[:, 0, 0] = pm0p0
+    A_batch[:, 0, 1] = 1 - pm1p1
+    
+    # Row 1
+    A_batch[:, 1, 0] = 1 - pm0p0
+    A_batch[:, 1, 1] = pm1p1
+
+    M_observed = A_batch @ M_ideal
+    
+    # The result is the Probability of Measuring 0 (First component)
+    qs = M_observed[:, 0, 0]
+    
     return qs
 
 def data_readout(qubit_index, datafile: str = '', data: np.ndarray = np.array([])):
@@ -387,10 +405,11 @@ def output_gate(d,
 
         # prior_lambdas = np.zeros(M * num_lambdas).reshape((M, num_lambdas))
         prior_lambdas = np.array([new_prior01,new_prior10,gate_lambdas])
+    else:
+        prior_lambdas = np.zeros((M, num_lambdas))
 
     for i in range(M):
         one_sample = np.zeros(num_lambdas)
-        prior_lambdas = np.zeros(num_lambdas)
         for j in range(num_lambdas):
             if j < 2:
                 one_sample[j] = tnorm01(calibration_lambda[j], meas_sd)

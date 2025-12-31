@@ -676,30 +676,39 @@ def QoI(prior_lambdas, prep_state='0'):
         prior lambdas in prior_lambdas.
 
     """
-    shape = prior_lambdas.shape
-    nQubit = 1
-
-    # Initialize the output array
-    qs = np.array([])
+    num_samples = prior_lambdas.shape[0]
 
     # Define Ideal Vector based on what we prepared
     if prep_state == '0':
         # [Prob(0), Prob(1)] -> [100%, 0%]
-        M_ideal = np.array([1.0, 0.0]) 
+        M_ideal = np.array([[1.0, 0.0]]*num_samples) 
     elif prep_state == '1':
         # [Prob(0), Prob(1)] -> [0%, 100%]
-        M_ideal = np.array([0.0, 1.0])
+        M_ideal = np.array([[0.0, 1.0]]*num_samples) 
     else: # Default to '+'
         print('Default to |+>, set prep_state = "0" or "1" for these preparations.')
-        M_ideal = np.ones(2**nQubit) / 2**nQubit
+        M_ideal = np.array([[0.5, 0.5]]*num_samples) 
 
-    # Simulate measurement error
-    for i in range(shape[0]):
-        A = errMitMat(prior_lambdas[i])
-        M_noisy = np.dot(A, M_ideal)
+    # Vectorised Forward noising place of previous errMitMat()
 
-        # Only record interested qubits (Prob of measuring 0)
-        qs = np.append(qs, M_noisy[0])
+    pm0p0 = prior_lambdas[:, 0]
+    pm1p1 = prior_lambdas[:, 1]
+
+    A_batch = np.zeros((num_samples, 2, 2))
+
+    # Row 0
+    A_batch[:, 0, 0] = pm0p0
+    A_batch[:, 0, 1] = 1 - pm1p1
+    
+    # Row 1
+    A_batch[:, 1, 0] = 1 - pm0p0
+    A_batch[:, 1, 1] = pm1p1
+
+    M_observed = A_batch @ M_ideal
+    
+    # The result is the Probability of Measuring 0 (First component)
+    qs = M_observed[:, 0, 0]
+
     return qs
 
 
