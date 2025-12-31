@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Dec 31 13:18:38 2025
+Created on Wed Dec 31 13:18:38 2025
 
-@author: Jude Metcalf
+@author: Jude L. Metcalf
 """
 # Qiskit
 from qiskit import QuantumCircuit, transpile

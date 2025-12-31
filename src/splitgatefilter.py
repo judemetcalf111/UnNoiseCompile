@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Jul 24 17:10:41 2020
+Created on Wed Dec 31 15:13:15 2025
 
-@author: Muqing Zheng
+@author: Jude L. Metcalf
 """
 
 # Qiskit
@@ -229,7 +229,7 @@ def QoI_gate(prior_lambdas: np.ndarray, gate_type, gate_num):
     # Stack into shape (N, 2, 1) -> [[p0], [p1]] for efficient matrix multiplication
     M_ideal = np.stack([noisy_p0, noisy_p1], axis=1)[..., np.newaxis]
 
-    # Vectorised in place of previous errMitMat
+    # Vectorised Forward noising place of previous errMitMat()
 
     pm0p0 = prior_lambdas[:, 0]
     pm1p1 = prior_lambdas[:, 1]
