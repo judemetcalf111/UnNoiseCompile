@@ -378,99 +378,90 @@ def output_gate(d,
         raise Exception("Must supply priors through either datafile as a directory string referring to a AWS Braket calibration .json or a nx3 numpy array")
 
     num_lambdas = 3
-    # Get distribution of data (Gaussian KDE)
-    d_ker = ss.gaussian_kde(d)  # i.e., pi_D^{obs}(q), q = Q(lambda)
 
-    if calibration_lambda[0] == 1 or calibration_lambda[0] < 0.7:
-        calibration_lambda[0] = 0.9
-    if calibration_lambda[1] == 1 or calibration_lambda[1] < 0.7:
-        calibration_lambda[1] = 0.9
+    # pre-allocate array
+    prior_lambdas = np.zeros((M, num_lambdas))
 
-    # Sample prior lambdas, assume prior distribution is Normal distribution with mean as the given probality from IBM
-    # Absolute value is used here to avoid negative values, so it is little twisted, may consider Gamma Distribution
-    
-    if (informed_priors == True) and (meas_prior_file != None):
+    if (informed_priors is True) and (meas_prior_file is not None):
+        # --- Informed Priors ---
         priors01 = np.loadtxt(meas_prior_file + f'State0_Post_Qubit{interested_qubit}.csv')
         priors10 = np.loadtxt(meas_prior_file + f'State1_Post_Qubit{interested_qubit}.csv')
-        calib_gate_mean = calibration_lambda[2]                                             # vendor gate error calibration
+        calib_gate_mean = calibration_lambda[2] # vendor gate error calibration
 
         kde01 = ss.gaussian_kde(priors01)
         kde10 = ss.gaussian_kde(priors10)
 
-        new_prior01 = kde01.resample(M,seed)
-        new_prior10 = kde10.resample(M,seed)
-        gate_lambdas = np.zeros(M)
-        for ind in range(M):
-            gate_lambdas[ind] = tnorm01(calib_gate_mean, gate_sd)
-
-        # prior_lambdas = np.zeros(M * num_lambdas).reshape((M, num_lambdas))
-        prior_lambdas = np.array([new_prior01,new_prior10,gate_lambdas])
+        prior_lambdas[:, 0] = kde01.resample(M, seed=seed)
+        prior_lambdas[:, 1] = kde10.resample(M, seed=seed)
+        
+        # Generate gate errors
+        # Note: If tnorm01 is not vectorized, list comprehension is faster than a loop with assignment
+        prior_lambdas[:, 2] = [tnorm01(calib_gate_mean, gate_sd) for _ in range(M)]
+        
     else:
-        prior_lambdas = np.zeros((M, num_lambdas))
+        # --- Uninformed Priors ---
+        # Using list comprehension for speed, then converting to array
+        # Assuming tnorm01 generates a single float.
+        for i in range(M):
+            # Measurement errors
+            prior_lambdas[i, 0] = tnorm01(calibration_lambda[0], meas_sd)
+            prior_lambdas[i, 1] = tnorm01(calibration_lambda[1], meas_sd)
+            # Gate error
+            prior_lambdas[i, 2] = tnorm01(calibration_lambda[2], gate_sd)
 
-    for i in range(M):
-        one_sample = np.zeros(num_lambdas)
-        for j in range(num_lambdas):
-            if j < 2:
-                one_sample[j] = tnorm01(calibration_lambda[j], meas_sd)
-                # while one_sample[j]<= 0 or one_sample[j] > 1:
-                #     one_sample[j] = np.random.normal(average_lambdas[j],meas_sd,1)
-            else:
-                one_sample[j] = tnorm01(calibration_lambda[j], gate_sd)
-                # while one_sample[j]<= 0 or one_sample[j] > 1:
-                #     one_sample[j] = np.random.normal(average_lambdas[j],gate_sd,1)
-        prior_lambdas[i] = one_sample
-
-    # Produce prior QoI
+    # Calculate Data KDE and Prior QoI
+    d_ker = ss.gaussian_kde(d)
     qs = QoI_gate(prior_lambdas, gate_type, gate_num)
-    #print(qs)
-    qs_ker = ss.gaussian_kde(qs)  # i.e., pi_D^{Q(prior)}(q), q = Q(lambda)
+    qs_ker = ss.gaussian_kde(qs)
 
-    # Plot and Print
-    print('Given Lambdas', average_lambdas)
+    print('Given Lambdas (Calibration):', calibration_lambda, '\nand standard uncertainties: {gate_sd}, {gate_sd}, {meas_sd}')
 
-    # Algorithm 2 of https://doi.org/10.1137/16M1087229
-
-    # Find the max ratio r(Q(lambda)) over all lambdas
-#    max_r, max_ind = findM(qs_ker, d_ker, qs)
-#    # Print and Check
-#    print('Final Accepted Posterior Lambdas')
-#    print('M: %.6g Index: %.d pi_obs = %.6g pi_Q(prior) = %.6g' %
-#          (max_r, max_ind, d_ker(qs[max_ind]), qs_ker(qs[max_ind])))
-    
-    max_r, max_q = findM(qs_ker, d_ker)
-    # Print and Check
+    max_r, max_q = findM(qs_ker, d_ker,prep_state = prep_state)
     print('Final Accepted Posterior Lambdas')
     print('M: %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
           (max_r, max_q, d_ker(max_q), qs_ker(max_q)))
 
-    post_lambdas = np.array([])
-    # Go to Rejection Iteration
-    for p in range(M):
-        r = d_ker(qs[p]) / qs_ker(qs[p])
-        eta = r / max_r
-        if eta > np.random.uniform(0, 1, 1):
-            post_lambdas = np.append(post_lambdas, prior_lambdas[p])
+    # Vectorised rejection sampling
+    
+    # Calculate ratio for all priors at once
+    r_vals = d_ker(qs) / qs_ker(qs)
+    eta_vals = r_vals / max_r
+    
+    # Generate random threshold for every sample
+    random_thresholds = np.random.uniform(0, 1, M)
+    
+    # Create a boolean mask of accepted samples
+    accept_mask = eta_vals > random_thresholds
+    
+    # Filter the lambdas using the mask
+    post_lambdas = prior_lambdas[accept_mask]
 
-    post_lambdas = post_lambdas.reshape(
-        int(post_lambdas.size / num_lambdas),
-        num_lambdas)  # Reshape since append destory subarrays
-    post_qs = QoI_gate(post_lambdas, ideal_p0, gate_num)
+    # Using the logic in the QoI_gate() function  
+    # to define forward error pass
+    post_qs = QoI_gate(post_lambdas, gate_type, gate_num) 
     post_ker = ss.gaussian_kde(post_qs)
 
+    # Integration for validation (Riemann Sum)
     xs = np.linspace(0, 1, 1000)
     xsd = np.linspace(0.1, 0.9, 1000)
+    
+    # Vectorised integration calculation 
+    q_eval = xs[:-1]
+    pdf_vals = qs_ker(q_eval)
+    # Avoid division by zero if pdf is 0
+    valid_indices = pdf_vals > 0
+    
+    r_int = np.zeros_like(q_eval)
+    r_int[valid_indices] = d_ker(q_eval[valid_indices]) / pdf_vals[valid_indices]
+    
+    delta_x = xs[1:] - xs[:-1]
+    I = np.sum(r_int * pdf_vals * delta_x)
 
-    I = 0
-    for i in range(xs.size - 1):
-        q = xs[i]
-        if qs_ker(q) > 0:
-            r = d_ker(q) / qs_ker(q)
-            I += r * qs_ker.pdf(q) * (xs[i + 1] - xs[i])  # Just Riemann Sum
-
-    print('Accepted Number N: %.d, fraction %.3f' %
+    print('Accepted Number N: %d, fraction %.3f' %
           (post_lambdas.shape[0], post_lambdas.shape[0] / M))
-    print('I(pi^post_Lambda) = %.5g' % (I))  # Need to close to 1
+    print('I(pi^post_Lambda) = %.5g' % I)
+    
+    # Assuming closest_average and closest_mode are defined externally
     print('Posterior Lambda Mean', closest_average(post_lambdas))
     print('Posterior Lambda Mode', closest_mode(post_lambdas))
 
@@ -479,25 +470,15 @@ def output_gate(d,
     print('0 to 1: KL-Div(pi_D^obs,pi_D^Q(post)) = %6g' %
           (ss.entropy(d_ker(xs), post_ker(xs))))
     
-    # File name change from Post_Qubit{} to Gate_Post_Qubit{}
-    with open(file_address + 'Gate_Post_Qubit{}.csv'.format(interested_qubit),
-              mode='w',
-              newline='') as sgm:
-        writer = csv.writer(sgm,
-                            delimiter=',',
-                            quotechar='"',
-                            quoting=csv.QUOTE_MINIMAL)
-        for i in range(post_lambdas.shape[0]):
-            writer.writerow(post_lambdas[i])
+    
+    output_filename = f"{file_address}Gate_Post_Qubit{interested_qubit}.csv"
+    np.savetxt(output_filename, post_lambdas, delimiter=",")
 
-    # Plots
-    plt.figure(figsize=(width,height), dpi=120, facecolor='white')
-    plt.plot(xsd,
-             d_ker(xsd),
-             color='Red',
-             linestyle='dashed',
-             linewidth=3,
-             label=r'$\pi^{\mathrm{obs}}_{\mathcal{D}}$')
+    # Defining matplotlib width and height here as in the preamble for clarity
+    width, height = 10, 6 
+    
+    plt.figure(figsize=(width, height), dpi=120, facecolor='white')
+    plt.plot(xsd, d_ker(xsd), color='Red', linestyle='dashed', linewidth=3, label=r'$\pi^{\mathrm{obs}}_{\mathcal{D}}$')
     plt.plot(xsd, post_ker(xsd), color='Blue', label=r'$\pi_{\mathcal{D}}^{Q(\mathrm{post})}$')
     plt.xlabel('Pr(Meas. 0)')
     plt.ylabel('Density')
@@ -506,19 +487,19 @@ def output_gate(d,
     plt.savefig(file_address + 'QoI-Qubit%g.pdf' % interested_qubit)
     plt.show()
     
-    plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-    # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
-    eps_ker = ss.gaussian_kde(post_lambdas[:, 2])
-    eps_line = np.linspace(
-        np.min(post_lambdas, axis=0)[2],  
-        np.max(post_lambdas, axis=0)[2], 1000) 
-    plt.plot(eps_line*0.5, eps_ker(eps_line), color='Blue') # WARNING: After 2021 Summer, 0.5*eps_in_code = eps_in_paper
+    plt.figure(figsize=(width, height), dpi=100, facecolor='white')
+    eps_vals = post_lambdas[:, 2]
+    eps_ker = ss.gaussian_kde(eps_vals)
+    eps_line = np.linspace(np.min(eps_vals), np.max(eps_vals), 1000)
+    
+    plt.plot(eps_line * 0.5, eps_ker(eps_line), color='Blue') 
     plt.ticklabel_format(axis="x", style="sci", scilimits=(-5, 1))
     plt.xlabel(r'$\epsilon_g$')
     plt.ylabel('Density')
     plt.tight_layout()
     plt.savefig(file_address + 'Eps-Qubit%g.pdf' % interested_qubit)
     plt.show()
+    
     return prior_lambdas, post_lambdas
 
 
