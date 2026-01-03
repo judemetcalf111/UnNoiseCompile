@@ -736,6 +736,8 @@ def findM(qs_ker, d_ker, prep_state):
         x_scan = np.linspace(0.95, 1, 1000)
     elif prep_state == '1':
         x_scan = np.linspace(0, 0.05, 1000)
+    else:
+        x_scan = np.linspace(0, 1, 1000)
     prior_density = qs_ker(x_scan)
     
     # Define Effective Support: 
@@ -905,8 +907,8 @@ def output(d,
         xsd = xs
 
     plt.figure(figsize=(6, 4), dpi=100, facecolor='white')
-    plt.plot(1-xsd, d_ker(xsd), 'r--', lw=2, label='Observed Data')
-    plt.plot(1-xsd, post_ker(xsd), 'b-', label='Posterior Model')
+    plt.plot(np.ones_like(xsd)-xsd, d_ker(xsd), 'r--', lw=2, label='Observed Data')
+    plt.plot(np.ones_like(xsd)-xsd, post_ker(xsd), 'b-', label='Posterior Model')
     plt.xlabel('Average Qubit Value')
     plt.ylabel('Density')
     plt.title(f'Calibration Qubit {interested_qubit} |{prep_state}>')
@@ -952,7 +954,7 @@ class SplitMeasFilter:
         # Initialize storage structures
         self.prior = {}
         self.post = {}
-        self.post_marginals = {f'Qubit{q}': {'0': None, '1': None} for q in qubit_order}
+        self.post_marginals = {f'Qubit{q}': {'0': np.array([]), '1': np.array([])} for q in qubit_order}
         self.params = None
         self.mat_mean = None
         self.mat_mode = None
