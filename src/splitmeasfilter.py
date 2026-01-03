@@ -29,343 +29,347 @@ height = 4.15 # plot height
 
 
 
-def get_braket_calibration_dict(device_arn, n_qubits=None):
-    """
-    Returns the params list in the exact format required by MeasFilter.
-    """
-    device = AwsDevice(device_arn)
-    properties = device.properties
+# def get_braket_calibration_dict(device_arn, n_qubits=None):
+#     """
+#     Returns the params list in the exact format required by MeasFilter.
+#     """
+#     device = AwsDevice(device_arn)
+#     properties = device.properties
     
-    # Try to find qubit count if not provided
-    if n_qubits is None:
-        try:
-            n_qubits = properties.paradigm.qubitCount
-        except:
-            n_qubits = 5 # Manual override if needed
+#     # Try to find qubit count if not provided
+#     if n_qubits is None:
+#         try:
+#             n_qubits = properties.paradigm.qubitCount
+#         except:
+#             n_qubits = 5 # Manual override if needed
 
-    formatted_params = []
+#     formatted_params = []
 
-    for q in range(n_qubits):
-        # 1. Default conservative error (5% error)
-        p_meas0_prep1 = 0.05 
-        p_meas1_prep0 = 0.05
+#     for q in range(n_qubits):
+#         # 1. Default conservative error (5% error)
+#         p_meas0_prep1 = 0.05 
+#         p_meas1_prep0 = 0.05
         
-        # 2. Try to extract real Fidelity from Braket Properties
-        # This structure depends on the provider (Rigetti, OQC, etc.)
-        try:
-            # Example for Rigetti (Standardized in Braket properties)
-            # We look for "fRO" (Readout Fidelity)
-            provider_specs = properties.provider.specs
-            qubit_specs = provider_specs.get(f"{q}Q", {}).get(f"{q}", {})
-            fRO = qubit_specs.get('fRO', None)
+#         # 2. Try to extract real Fidelity from Braket Properties
+#         # This structure depends on the provider (Rigetti, OQC, etc.)
+#         try:
+#             # Example for Rigetti (Standardized in Braket properties)
+#             # We look for "fRO" (Readout Fidelity)
+#             provider_specs = properties.provider.specs
+#             qubit_specs = provider_specs.get(f"{q}Q", {}).get(f"{q}", {})
+#             fRO = qubit_specs.get('fRO', None)
             
-            if fRO:
-                error = 1.0 - fRO
-                # Assume symmetric error if specific p(0|1) isn't detailed
-                p_meas0_prep1 = error
-                p_meas1_prep0 = error
-        except:
-            # If extraction fails, we stick to the 0.05 default
-            pass
+#             if fRO:
+#                 error = 1.0 - fRO
+#                 # Assume symmetric error if specific p(0|1) isn't detailed
+#                 p_meas0_prep1 = error
+#                 p_meas1_prep0 = error
+#         except:
+#             # If extraction fails, we stick to the 0.05 default
+#             pass
 
-        # 3. Create the dictionary for this qubit
-        qubit_cal = {
-            'qubit': q,
-            'pm0p1': p_meas0_prep1, # PROB MEASURING 0 GIVEN PREP 1
-            'pm1p0': p_meas1_prep0, # PROB MEASURING 1 GIVEN PREP 0
-            # Extra fields required by the code logic, even if unused
-            'itr': 32,
-            'shots': 8192
-        }
+#         # 3. Create the dictionary for this qubit
+#         qubit_cal = {
+#             'qubit': q,
+#             'pm0p1': p_meas0_prep1, # PROB MEASURING 0 GIVEN PREP 1
+#             'pm1p0': p_meas1_prep0, # PROB MEASURING 1 GIVEN PREP 0
+#             # Extra fields required by the code logic, even if unused
+#             'itr': 32,
+#             'shots': 8192
+#         }
         
-        formatted_params.append(qubit_cal)
+#         formatted_params.append(qubit_cal)
 
-    return np.array(formatted_params)
+#     return np.array(formatted_params)
 
 
-def param_record(backend, itr=32, shots=8192, if_write=True, file_address=''):
-    """Write backend property into an array of dict 
-       and save as csv if permissible.
+# def param_record(backend, itr=32, shots=8192, if_write=True, file_address=''):
+#     """Write backend property into an array of dict 
+#        and save as csv if permissible.
 
-    Args:
-      backend: Backend
-        A Qiskit backend instance.
-      itr: int
-        number of iterations of job submission.
-      shots: int
-        number of shots per each job submission.
-      if_write: boolean
-        True if save the properties as a csv file.
-      file_address: string
-        The relative file address to save backend properties. 
-        Ends with '/' if not empty
-        The default is ''.
+#     Args:
+#       backend: Backend
+#         A Qiskit backend instance.
+#       itr: int
+#         number of iterations of job submission.
+#       shots: int
+#         number of shots per each job submission.
+#       if_write: boolean
+#         True if save the properties as a csv file.
+#       file_address: string
+#         The relative file address to save backend properties. 
+#         Ends with '/' if not empty
+#         The default is ''.
 
-    Returns: numpy array
-      An array of dicts. Each dict records all characterization of one qubit.
-    """
-    allParam = np.array([])
+#     Returns: numpy array
+#       An array of dicts. Each dict records all characterization of one qubit.
+#     """
+#     allParam = np.array([])
     
-    try:
-        # Check if backend supports properties interface
-        if not hasattr(backend, 'properties') or backend.properties() is None:
-            raise Exception("Backend properties not available.")
+#     try:
+#         # Check if backend supports properties interface
+#         if not hasattr(backend, 'properties') or backend.properties() is None:
+#             raise Exception("Backend properties not available.")
 
-        prop_dict = backend.properties().to_dict()
-        nQubits = len(prop_dict['qubits'])
+#         prop_dict = backend.properties().to_dict()
+#         nQubits = len(prop_dict['qubits'])
         
-        # Helper to safely extract values from property lists
-        def get_val(props, name):
-            for item in props:
-                if item.get('name') == name:
-                    return item.get('value')
-            return 0.0 # Default if not found
+#         # Helper to safely extract values from property lists
+#         def get_val(props, name):
+#             for item in props:
+#                 if item.get('name') == name:
+#                     return item.get('value')
+#             return 0.0 # Default if not found
 
-        target_qubits = range(nQubits)
+#         target_qubits = range(nQubits)
         
-        for target_qubit in target_qubits:
-            qubit_props = prop_dict['qubits'][target_qubit]
+#         for target_qubit in target_qubits:
+#             qubit_props = prop_dict['qubits'][target_qubit]
             
-            # Basic params
-            params = {
-                'qubit': target_qubit,
-                'update_date': prop_dict.get('last_update_date', 'N/A'),
-                'T1': get_val(qubit_props, 'T1'),
-                'T2': get_val(qubit_props, 'T2'),
-                'freq': get_val(qubit_props, 'frequency'),
-                'readout_err': get_val(qubit_props, 'readout_error'),
-                'pm0p1': get_val(qubit_props, 'prob_meas0_prep1'),
-                'pm1p0': get_val(qubit_props, 'prob_meas1_prep0'),
-                'itr': itr,
-                'shots': shots,
-            }
+#             # Basic params
+#             params = {
+#                 'qubit': target_qubit,
+#                 'update_date': prop_dict.get('last_update_date', 'N/A'),
+#                 'T1': get_val(qubit_props, 'T1'),
+#                 'T2': get_val(qubit_props, 'T2'),
+#                 'freq': get_val(qubit_props, 'frequency'),
+#                 'readout_err': get_val(qubit_props, 'readout_error'),
+#                 'pm0p1': get_val(qubit_props, 'prob_meas0_prep1'),
+#                 'pm1p0': get_val(qubit_props, 'prob_meas1_prep0'),
+#                 'itr': itr,
+#                 'shots': shots,
+#             }
 
-            # Try to fetch gate errors if available in legacy format
-            # Many non-IBM backends won't have this specific structure, so we wrap in try
-            try:
-                gates = prop_dict.get('gates', [])
-                # Simplified extraction logic or defaults
-                # This part is highly specific to IBM's old map; defaulting if fails
-                params['id_error'] = 0.001
-                params['u3_error'] = 0.001 
-                # (Real extraction logic omitted for brevity/compatibility)
-            except:
-                pass
+#             # Try to fetch gate errors if available in legacy format
+#             # Many non-IBM backends won't have this specific structure, so we wrap in try
+#             try:
+#                 gates = prop_dict.get('gates', [])
+#                 # Simplified extraction logic or defaults
+#                 # This part is highly specific to IBM's old map; defaulting if fails
+#                 params['id_error'] = 0.001
+#                 params['u3_error'] = 0.001 
+#                 # (Real extraction logic omitted for brevity/compatibility)
+#             except:
+#                 pass
 
-            allParam = np.append(allParam, params)
+#             allParam = np.append(allParam, params)
 
-        if if_write:
-            with open(file_address + 'Params.csv', mode='w', newline='') as sgm:
-                param_writer = csv.writer(sgm,
-                                          delimiter=',',
-                                          quotechar='"',
-                                          quoting=csv.QUOTE_MINIMAL)
-                for pa in allParam:
-                    for key, val in pa.items():
-                        param_writer.writerow([key, val])
-                    param_writer.writerow(['End'])
+#         if if_write:
+#             with open(file_address + 'Params.csv', mode='w', newline='') as sgm:
+#                 param_writer = csv.writer(sgm,
+#                                           delimiter=',',
+#                                           quotechar='"',
+#                                           quoting=csv.QUOTE_MINIMAL)
+#                 for pa in allParam:
+#                     for key, val in pa.items():
+#                         param_writer.writerow([key, val])
+#                     param_writer.writerow(['End'])
 
-    except Exception as e:
-        print(f"Note: Backend parameters could not be recorded ({str(e)}). Using defaults for inference.")
-        # Return empty; inference engine handles empty params by setting defaults
-        return np.array([])
+#     except Exception as e:
+#         print(f"Note: Backend parameters could not be recorded ({str(e)}). Using defaults for inference.")
+#         # Return empty; inference engine handles empty params by setting defaults
+#         return np.array([])
 
-    return allParam
+#     return allParam
 
 
-def meas_circ(nQubits, backend=None, itr=32):
-    """
-    Generates 2 * itr circuits compatible with Qiskit 2.x and Braket.
-    - First half prepares |0>
-    - Second half prepares |1>
+# def meas_circ(nQubits, backend=None, itr=32):
+#     """
+#     Generates 2 * itr circuits compatible with Qiskit 2.x and Braket.
+#     - First half prepares |0>
+#     - Second half prepares |1>
 
-    Args:
-        nQubits: int
-            number of qubits.
-        backend: Backend
-            A Qiskit backend instance. Used for transpilation.
-        itr: int
-            number of iterations of each state preparation.
+#     Args:
+#         nQubits: int
+#             number of qubits.
+#         backend: Backend
+#             A Qiskit backend instance. Used for transpilation.
+#         itr: int
+#             number of iterations of each state preparation.
 
-    Returns: list of form [{QuantumCircuit preparing |0>}, {QuantumCircuit preparing |1>}]
-    """
-    circs = []
+#     Returns: list of form [{QuantumCircuit preparing |0>}, {QuantumCircuit preparing |1>}]
+#     """
+#     circs = []
     
-    # Create |0> circuits (Identity)
-    # Note: Explicit 'id' gates often optimized away, so we use barriers 
-    # or simple measurements to define the state.
-    c0 = QuantumCircuit(nQubits, nQubits)
+#     # Create |0> circuits (Identity)
+#     # Note: Explicit 'id' gates often optimized away, so we use barriers 
+#     # or simple measurements to define the state.
+#     c0 = QuantumCircuit(nQubits, nQubits)
 
-    # No gates needed for |0>, just measure. 
-    # We add a barrier to prevent transpiler from merging if we added ops later.
-    c0.barrier() 
-    c0.measure(range(nQubits), range(nQubits))
+#     # No gates needed for |0>, just measure. 
+#     # We add a barrier to prevent transpiler from merging if we added ops later.
+#     c0.barrier() 
+#     c0.measure(range(nQubits), range(nQubits))
     
-    # Create |1> circuits (X gate)
-    c1 = QuantumCircuit(nQubits, nQubits)
-    c1.x(range(nQubits)) # Broadcast X to all qubits
-    c1.barrier()
-    c1.measure(range(nQubits), range(nQubits))
+#     # Create |1> circuits (X gate)
+#     c1 = QuantumCircuit(nQubits, nQubits)
+#     c1.x(range(nQubits)) # Broadcast X to all qubits
+#     c1.barrier()
+#     c1.measure(range(nQubits), range(nQubits))
 
-    # Transpile if backend provided (Optional but recommended for ISA)
-    if backend:
-        # In Qiskit 2.x, it's best to transpile once before copying
-        c0 = transpile(c0, backend)
-        c1 = transpile(c1, backend)
+#     # Transpile if backend provided (Optional but recommended for ISA)
+#     if backend:
+#         # In Qiskit 2.x, it's best to transpile once before copying
+#         c0 = transpile(c0, backend)
+#         c1 = transpile(c1, backend)
 
-    # Create the batch
-    # We use metadata or naming to track them
-    ## Perhaps change to one request with many shots?
-    for i in range(itr):
-        # Create copies
-        c0_copy = c0.copy()
-        c0_copy.name = f"cal_0_itr{i}"
-        circs.append(c0_copy)
+#     # Create the batch
+#     # We use metadata or naming to track them
+#     ## Perhaps change to one request with many shots?
+#     for i in range(itr):
+#         # Create copies
+#         c0_copy = c0.copy()
+#         c0_copy.name = f"cal_0_itr{i}"
+#         circs.append(c0_copy)
         
-    for i in range(itr):
-        c1_copy = c1.copy()
-        c1_copy.name = f"cal_1_itr{i}"
-        circs.append(c1_copy)
+#     for i in range(itr):
+#         c1_copy = c1.copy()
+#         c1_copy.name = f"cal_1_itr{i}"
+#         circs.append(c1_copy)
         
-    return circs
+#     return circs
 
-def collect_filter_data(backend,
-                        itr=32,
-                        shots=8192,
-                        if_write=True,
-                        file_address='',
-                        job_id=''):
-    """
-    Collects measurement data compatible with Amazon Braket Qiskit Provider.
-    """
-    # 1. Determine qubit count safely
-    try:
-        # Braket backends usually have 'num_qubits' attribute
-        nQubits = backend.num_qubits
-    except:
-        nQubits = 5 # Fallback
+# def collect_filter_data(backend,
+#                         itr=32,
+#                         shots=8192,
+#                         if_write=True,
+#                         file_address='',
+#                         job_id=''):
+#     """
+#     Collects measurement data compatible with Amazon Braket Qiskit Provider.
+#     """
+#     # Determine qubit count 
+#     try:
+#         nQubits = backend.num_qubits
+#     except:
+#         nQubits = 5 # Fallback
+#         raise Exception("Number of Qubits not found!!!!")
 
-    readout_m0 = np.array([])
+#     readout_m0 = np.array([])
     
-    # 2. Generate the circuits (One circuit repeated 'itr' times with unique names)
-    circs = meas_circ(nQubits, backend, itr=itr)
+#     # Generate the circuits (One circuit repeated 'itr' times with unique names)
+#     circs = meas_circ(nQubits, backend, itr=itr)
 
-    # 3. Job Execution or Retrieval
-    if job_id:
-        print(f"Retrieving existing Braket Job ID: {job_id}")
-        try:
-            # Braket Provider usually allows retrieving via the backend or service
-            job_m0 = backend.retrieve_job(job_id)
-        except Exception as e:
-            print(f"Failed to retrieve job: {e}")
-            return np.array([])
-    else:
-        print(f"Submitting new batch job with {itr} circuits to {backend.name}...")
-        try:
-            # Execute all circuits in one batch
-            # 'memory=True' is CRITICAL to get the bitstrings required for this inference
-            job_m0 = backend.run(circs, shots=shots, memory=True)
-            print(f"Job submitted. ID: {job_m0.job_id()}")
+#     # Job Execution or Retrieval (Sim or Real)
+#     if job_id:
+#         print(f"Retrieving existing Braket Job ID: {job_id}")
+#         try:
+#             # Braket Provider usually allows retrieving via the backend or service
+#             job_m0 = backend.retrieve_job(job_id)
+#         except Exception as e:
+#             print(f"Failed to retrieve job: {e}")
+#             return np.array([])
+#     else:
+#         print(f"Submitting new batch job with {itr} circuits to {backend.name}...")
+#         try:
+#             # Executing all circuits in one batch
+#             # 'memory=True' to get the bitstrings required for this inference
+#             job_m0 = backend.run(circs, shots=shots, memory=True)
+#             print(f"Job submitted. ID: {job_m0.job_id()}")
             
-            # Optional: Explicit wait loop if the provider doesn't block automatically
-            # while not job_m0.in_final_state():
-            #     print("Status:", job_m0.status())
-            #     time.sleep(5)
+#             # For later, as of 03/01: Explicit wait loop if the provider doesn't block automatically
+#             # while not job_m0.in_final_state():
+#             #     print("Status:", job_m0.status())
+#             #     time.sleep(5)
                 
-        except Exception as e:
-            print(f"Job submission failed: {e}")
-            return np.array([])
+#         except Exception as e:
+#             print(f"Job submission failed: {e}")
+#             return np.array([])
 
-    # 4. Extract Results
-    try:
-        # This blocks until the job is done
-        m0_res = job_m0.result()
-        
-        print("Job complete. extracting memory...")
+#     # Extract Results
+# # try:
+#     # This blocks until the job is done
+#     m0_res = job_m0.result()
+    
+#     print("Job complete. extracting memory...")
 
-        # Loop through the experiments (one for each circuit in the batch)
-        for i in range(itr):
-            # get_memory(i) retrieves the list of bitstrings for the i-th circuit
-            # e.g., ['000', '001', '000', ...]
-            memory_data = m0_res.get_memory(i)
-            readout_m0 = np.append(readout_m0, memory_data)
+#     # Loop through the experiments (one for each circuit in the batch)
+#     for i in range(itr):
+#         # get_memory(i) retrieves the list of bitstrings for the i-th circuit
+#         # e.g., ['000', '001', '000', ...]
+#         memory_data = m0_res.get_memory(i)
+#         readout_m0 = np.append(readout_m0, memory_data)
 
-        # 5. Save to CSV (Original script logic)
-        if if_write:
-            filename = file_address + 'Filter_data.csv'
-            print(f"Saving data to {filename}...")
-            # Using 'w' mode with standard csv writer
-            with open(filename, mode='w', newline='') as sgr:
-                read_writer = csv.writer(sgr, quoting=csv.QUOTE_MINIMAL)
-                # The original script writes the entire flattened array as one row
-                read_writer.writerow(readout_m0)
+#     # Save to CSV
+#     if if_write:
+#         filename = file_address + 'Filter_data.csv'
+#         print(f"Saving data to {filename}...")
+#         # Using 'w' mode with standard csv writer
+#         with open(filename, mode='w', newline='') as sgr:
+#             read_writer = csv.writer(sgr, quoting=csv.QUOTE_MINIMAL)
+#             read_writer.writerow(readout_m0)
                 
-    except Exception as e:
-        print(f"Error processing results: {e}")
-        # If accessing memory fails, print available keys to help debug
-        try:
-            print("Result keys available:", m0_res.get_counts())
-        except:
-            pass
+# # except Exception as e:
+# #     print(f"Error processing results: {e}")
+# #     # If accessing memory fails, print available keys to help debug
+# #     try:
+# #         print("Result keys available:", m0_res.get_counts())
+# #     except:
+# #         pass
 
-    return readout_m0
-def read_params(file_address=''):
-    """Read out backend properties from csv file generated by param_record().
-
-    Args:
-      file_address: string
-        The relative file address to read backend properties. 
-        Ends with '/' if not empty
-        The default is ''.
-
-    Returns: numpy array
-      An array of dicts. Each dict records all characterization of one qubit.
-    """
-    textKeys = ['name', 'update_date', 'qubit']
-    intKeys = ['itr', 'shots']
-    # Read Parameters
-    with open(file_address + 'Params.csv', mode='r') as sgm:
-        reader = csv.reader(sgm)
-        params = np.array([])
-        singleQubit = {}
-        first = True
-        for row in reader:
-            if row[0] == 'End':
-                params = np.append(params, singleQubit)
-                singleQubit = {}
-            else:
-                singleQubit[row[0]] = row[1]
-
-    # Convert corresponding terms into floats or ints
-    for qubit in params:
-        for key in qubit.keys():
-            if key not in textKeys:
-                qubit[key] = float(qubit[key])
-            if key in intKeys:
-                qubit[key] = int(qubit[key])
-
-    return params
+#     return readout_m0
 
 
-def read_filter_data(file_address=''):
-    """Read out bit string data from csv file generated by collect_filter_data().
+# def read_params(file_address=''):
+#     """Read out backend properties from csv file generated by param_record().
 
-    Args:
-      file_address: string
-        The relative file address to read data for filter generation. 
-        Ends with '/' if not empty
-        The default is ''.
+#     Args:
+#       file_address: string
+#         The relative file address to read backend properties. 
+#         Ends with '/' if not empty
+#         The default is ''.
 
-    Returns: numpy array
-      An array of bit strings.
-    """
-    # Should be able to use np.genfromtxt
-    cali01 = np.genfromtxt(file_address + 'Filter_data.csv', delimiter=',',dtype=str)
-    if len(cali01) < 2:
-        with open(file_address + 'Filter_data.csv', mode='r') as measfile:
-            reader = csv.reader(measfile)
-            cali01 = np.asarray([row for row in reader][0])
-    return cali01
+#     Returns: numpy array
+#       An array of dicts. Each dict records all characterization of one qubit.
+#     """
+#     textKeys = ['name', 'update_date', 'qubit']
+#     intKeys = ['itr', 'shots']
+#     # Read Parameters
+#     with open(file_address + 'Params.csv', mode='r') as sgm:
+#         reader = csv.reader(sgm)
+#         params = []
+#         singleQubit = {}
+#         first = True
+#         for row in reader:
+#             if row[0] == 'End':
+#                 params.append(singleQubit)
+#                 singleQubit = {}
+#             else:
+#                 singleQubit[row[0]] = row[1]
+
+#     # Convert to numpy array
+#     params = np.array(params)
+
+#     # Convert corresponding terms into floats or ints
+#     for qubit in params:
+#         for key in qubit.keys():
+#             if key not in textKeys:
+#                 qubit[key] = float(qubit[key])
+#             if key in intKeys:
+#                 qubit[key] = int(qubit[key])
+
+#     return params
+
+
+# def read_filter_data(file_address=''):
+#     """Read out bit string data from csv file generated by collect_filter_data().
+
+#     Args:
+#       file_address: string
+#         The relative file address to read data for filter generation. 
+#         Ends with '/' if not empty
+#         The default is ''.
+
+#     Returns: numpy array
+#       An array of bit strings.
+#     """
+#     # Should be able to use np.genfromtxt
+#     cali01 = np.genfromtxt(file_address + 'Filter_data.csv', delimiter=',',dtype=str)
+#     if len(cali01) < 2:
+#         with open(file_address + 'Filter_data.csv', mode='r') as measfile:
+#             reader = csv.reader(measfile)
+#             cali01 = np.asarray([row for row in reader][0])
+#     return cali01
 
 
 def tnorm01(center, sd, size=1):
@@ -403,36 +407,36 @@ def find_mode(data):
     return line[np.argmax(kde(line))]
 
 
-def closest_mode(post_lambdas):
-    """Find the tuple of model parameters that closed to 
-       the Maximum A Posteriori (MAP) of 
-       posterior distribution of each parameter
+# def closest_mode(post_lambdas):
+#     """Find the tuple of model parameters that closed to 
+#        the Maximum A Posteriori (MAP) of 
+#        posterior distribution of each parameter
 
-    Args:
-      post_lambdas: numpy array
-        an n-by-m array where n is the number of posteriors and m is number 
-        of parameters in the model
+#     Args:
+#       post_lambdas: numpy array
+#         an n-by-m array where n is the number of posteriors and m is number 
+#         of parameters in the model
 
-    Returns: numpy array
-      an array that contains the required model parameters.
-    """
+#     Returns: numpy array
+#       an array that contains the required model parameters.
+#     """
 
-    mode_lam = []
-    for j in range(post_lambdas.shape[1]):
-        mode_lam.append(find_mode(post_lambdas[:, j]))
+#     mode_lam = []
+#     for j in range(post_lambdas.shape[1]):
+#         mode_lam.append(find_mode(post_lambdas[:, j]))
 
-    sol = np.array([])
-    smallest_norm = nl.norm(post_lambdas[0])
-    mode_lam = np.array(mode_lam)
-    for lam in post_lambdas:
-        norm_diff = nl.norm(lam - mode_lam)
-        if norm_diff < smallest_norm:
-            smallest_norm = norm_diff
-            sol = lam
-    return sol
+#     sol = np.array([])
+#     smallest_norm = nl.norm(post_lambdas[0])
+#     mode_lam = np.array(mode_lam)
+#     for lam in post_lambdas:
+#         norm_diff = nl.norm(lam - mode_lam)
+#         if norm_diff < smallest_norm:
+#             smallest_norm = norm_diff
+#             sol = lam
+#     return sol
 
 
-def closest_average(post_lambdas):
+# def closest_average(post_lambdas):
     """Find the tuple of model parameters that closed to 
        the mean of posterior distribution of each parameter
 
@@ -541,16 +545,18 @@ def safe_mean(data) -> float:
 
     return mean
 
-def vecToDict_inv(nQubits, shots, vec):
-    """ 
-      Same as dictToVec() but key uses big-endian convention
-    """
-    counts = {}
-    form = "{0:0" + str(nQubits) + "b}"
-    for i in range(2**nQubits):
-        key = form.format(i)[::-1]
-        counts[key] = int(vec[i] * shots)
-    return counts
+
+### Needed? What for?
+# def vecToDict_inv(nQubits, shots, vec):
+#     """ 
+#       Same as dictToVec() but key uses big-endian convention
+#     """
+#     counts = {}
+#     form = "{0:0" + str(nQubits) + "b}"
+#     for i in range(2**nQubits):
+#         key = form.format(i)[::-1]
+#         counts[key] = int(vec[i] * shots)
+#     return counts
 
 def dict_filter(data_dict: dict[str, int], percent: float | int = 99.0) -> dict[str, int]:
         """
@@ -591,42 +597,63 @@ def dict_filter(data_dict: dict[str, int], percent: float | int = 99.0) -> dict[
 
 # Functions
 def getData0(data, num_group, interested_qubit):
-    """ Get the probabilities of measuring 0 from binay readouts
+    """ Get the probabilities of measuring 0 from binary readouts
         **Binary number follows little-endian convention**
 
     Parameters
     ----------
-    data : array
-        an array of binary readouts.
+    data : array_like
+        An array of binary readout strings (e.g., ['001', '010']).
     num_group : int
-        number of probabilities. E.g. If you have 1000 binary string readouts,
-        you can set num_group = 10 so that you will have 10 probabilities,
-        each probability is calculated from 100 binary string readouts
+        Number of groups to split the data into for probability calculation.
+        Data length must be divisible by num_group.
     interested_qubit : int
-        which qubit you interested in.
+        The index of the qubit to analyze (0-indexed).
 
     Returns
     -------
     prob0 : numpy array
-        array of proabilitilies of measuring 0.
+        Array of probabilities of measuring 0 for each group.
 
     """
-    prob0 = np.zeros(num_group)
-    groups = np.split(data, num_group)
-    for i in range(num_group):
-        count = 0
-        for d in groups[i]:
-            d_rev = d[::-1]
-            try:
-                if d_rev[interested_qubit] == '0':
-                    count += 1
-            except: # usually because only the measurement of the interest qubit is returned
-                if d_rev[0] == '0':
-                    count += 1
+    # Ensure input is a numpy array of strings (bytes for performance)
+    data_arr = np.array(data, dtype='S')
+    
+    # Check if data can be evenly divided
+    if data_arr.size % num_group != 0:
+        raise ValueError(f"Data size {data_arr.size} is not divisible by num_group {num_group}")
 
-        prob0[i] = count / groups[i].size
+    # Since the input is little-endian (qubit 0 is at the end of the string),
+    # the index is: Length - 1 - interested_qubit.
+    
+    # length of the strings 
+    str_len = data_arr.itemsize 
+    
+    # Calculate the target index in the string (Big-Endian representation in memory)
+    col_idx = str_len - 1 - interested_qubit
+
+    # replicate the 'try/except' fallback logic from the original code:
+    # If the qubit index is out of bounds (string too short), look at the 
+    # 0-th qubit (which corresponds to the last character in the string).
+    if col_idx < 0:
+        col_idx = str_len - 1
+
+    # Convert array of strings into a 2D matrix of single characters
+    # e.g., ['01', '10'] becomes [['0', '1'], ['1', '0']]
+    # reshape into (total_samples, string_length)
+    chars = data_arr.view('S1').reshape(data_arr.size, -1)
+    
+    # extract only the column corresponding to the interested qubit
+    qubit_measurements = chars[:, col_idx]
+    
+    # Reshape to (num_group, samples_per_group)
+    grouped_measurements = qubit_measurements.reshape(num_group, -1)
+    
+    # Check where measurements are '0' (results in a boolean matrix)
+    # Taking the mean of booleans converts True to 1 and False to 0, giving the probability.
+    prob0 = (grouped_measurements == b'0').mean(axis=1)
+    
     return prob0
-
 
 def QoI(prior_lambdas, prep_state='0'):
     """
