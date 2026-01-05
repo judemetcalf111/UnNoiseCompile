@@ -346,217 +346,6 @@ def data_readout(qubit_index, datafile: str = '', data: np.ndarray = np.array([]
     return lambdas
     
 
-# Used to call output, delete ideal_p0 parameter
-# WARNING: After 2021 Summer, 0.5*eps_in_code = eps_in_paper
-def output_gate(d,
-                interested_qubit,
-                M,
-                params,
-                gate_sd,
-                meas_sd,
-                gate_type,
-                gate_num,
-                datafile = None,
-                data = None,
-                seed=127,
-                file_address='',
-                meas_prior_file = None,
-                gate_prior = None,
-                prep_state = '0',
-                informed_priors = True):
-    """
-      The main function that do all Bayesian inferrence part
-
-    Parameters
-    ----------
-    d : array
-        array of data (Observed QoI). Here, it is array of prob. of meas. 0.
-    interested_qubit : int
-        The index of qubit that we are looking at. 
-        For naming the figure file only.
-    M : int
-        Number of priors required.
-    params : dict
-        A dictionary records backend properties. Must have
-        {'pm1p0': float # Pr(Meas. 1| Prep. 0)
-         'pm0p1': float # Pr(Meas. 0| Prep. 1)
-         }
-    gate_sd : float
-        standard deviation for truncated normal distribution when generating 
-        prior gate error parameters.
-    meas_sd : float
-        same as gate_sd but for meausrement error parameters.
-    gate_type : String
-        Chosen between "X", "Y", and "Z". 
-        Should be the same as gate_type in Gateexp().
-    gate_num : int
-        number of gates in the experiment circuit.
-        Should be the same as nGates in Gateexp().
-    seed : int, optional
-        Seed for random numbers. The default is 127.
-    file_address: string, optional
-        The relative file address to save data file. 
-        Ends with '/' if not empty
-        The default is ''.
-    write_data_for_SB : boolean, optional
-        If write data to execute standard Bayesian.
-        This parameter is only for the purpose of writing paper.
-        Just IGNORE IT.
-        The default is False.
-
-    Raises
-    ------
-    Exception
-        DESCRIPTION.
-
-    Returns
-    -------
-    prior_lambdas : numpy array
-        prior lambdas in the form of a-by-b matrix where 
-        a is the number of priors and m is the number of model parameters
-    post_lambdas : numpy array
-        prior lambdas in the form of a-by-b matrix where 
-        a is the number of posterior and m is the number of model parameters
-
-    """
-    np.random.seed(seed)
-
-    # Reading out the datafile/data through data_readout should give the array [error_01,error_10,err_gate]
-    # The standard workflow here is to measure the error_01 and error_10 in other measurements, and then to
-    # construct informative priors using empirical bitflip experiments. The gate calibration error is, however, important!
-    if datafile is not None:
-        calibration_lambda = data_readout(qubit_index = interested_qubit,datafile=datafile)
-    elif data is not None:
-        calibration_lambda = data_readout(qubit_index = interested_qubit,data=data)
-    else:
-        raise Exception("Must supply priors through either datafile as a directory string referring to a AWS Braket calibration .json or a nx3 numpy array")
-
-    num_lambdas = 3
-
-    # pre-allocate array
-    prior_lambdas = np.zeros((M, num_lambdas))
-
-    if (informed_priors is True) and (meas_prior_file is not None):
-        # --- Informed Priors ---
-        priors01 = np.loadtxt(meas_prior_file + f'State0_Post_Qubit{interested_qubit}.csv')
-        priors10 = np.loadtxt(meas_prior_file + f'State1_Post_Qubit{interested_qubit}.csv')
-        calib_gate_mean = calibration_lambda[2] # vendor gate error calibration
-
-        kde01 = ss.gaussian_kde(priors01)
-        kde10 = ss.gaussian_kde(priors10)
-
-        prior_lambdas[:, 0] = kde01.resample(M, seed=seed)
-        prior_lambdas[:, 1] = kde10.resample(M, seed=seed)
-        
-        # Generate gate errors
-        # Note: If tnorm01 is not vectorized, list comprehension is faster than a loop with assignment
-        prior_lambdas[:, 2] = [tnorm01(calib_gate_mean, gate_sd) for _ in range(M)]
-        
-    else:
-        # --- Uninformed Priors ---
-        # Using list comprehension for speed, then converting to array
-        # Assuming tnorm01 generates a single float.
-        for i in range(M):
-            # Measurement errors
-            prior_lambdas[i, 0] = tnorm01(calibration_lambda[0], meas_sd)
-            prior_lambdas[i, 1] = tnorm01(calibration_lambda[1], meas_sd)
-            # Gate error
-            prior_lambdas[i, 2] = tnorm01(calibration_lambda[2], gate_sd)
-
-    # Calculate Data KDE and Prior QoI
-    d_ker = ss.gaussian_kde(d)
-    qs = QoI_gate(prior_lambdas, gate_type, gate_num)
-    qs_ker = ss.gaussian_kde(qs)
-
-    print('Given Lambdas (Calibration):', calibration_lambda, '\nand standard uncertainties: {gate_sd}, {gate_sd}, {meas_sd}')
-
-    max_r, max_q = findM(qs_ker, d_ker,prep_state = prep_state)
-    print('Final Accepted Posterior Lambdas')
-    print('M: %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
-          (max_r, max_q, d_ker(max_q), qs_ker(max_q)))
-
-    # Vectorised rejection sampling
-    
-    # Calculate ratio for all priors at once
-    r_vals = d_ker(qs) / qs_ker(qs)
-    eta_vals = r_vals / max_r
-    
-    # Generate random threshold for every sample
-    random_thresholds = np.random.uniform(0, 1, M)
-    
-    # Create a boolean mask of accepted samples
-    accept_mask = eta_vals > random_thresholds
-    
-    # Filter the lambdas using the mask
-    post_lambdas = prior_lambdas[accept_mask]
-
-    # Using the logic in the QoI_gate() function  
-    # to define forward error pass
-    post_qs = QoI_gate(post_lambdas, gate_type, gate_num) 
-    post_ker = ss.gaussian_kde(post_qs)
-
-    # Integration for validation (Riemann Sum)
-    xs = np.linspace(0, 1, 1000)
-    xsd = np.linspace(0.1, 0.9, 1000)
-    
-    # Vectorised integration calculation 
-    q_eval = xs[:-1]
-    pdf_vals = qs_ker(q_eval)
-    # Avoid division by zero if pdf is 0
-    valid_indices = pdf_vals > 0
-    
-    r_int = np.zeros_like(q_eval)
-    r_int[valid_indices] = d_ker(q_eval[valid_indices]) / pdf_vals[valid_indices]
-    
-    delta_x = xs[1:] - xs[:-1]
-    I = np.sum(r_int * pdf_vals * delta_x)
-
-    print('Accepted Number N: %d, fraction %.3f' %
-          (post_lambdas.shape[0], post_lambdas.shape[0] / M))
-    print('I(pi^post_Lambda) = %.5g' % I)
-    
-    # Assuming closest_average and closest_mode are defined externally
-    print('Posterior Lambda Mean', closest_average(post_lambdas))
-    print('Posterior Lambda Mode', closest_mode(post_lambdas))
-
-    print('0 to 1: KL-Div(pi_D^Q(post),pi_D^obs) = %6g' %
-          (ss.entropy(post_ker(xs), d_ker(xs))))
-    print('0 to 1: KL-Div(pi_D^obs,pi_D^Q(post)) = %6g' %
-          (ss.entropy(d_ker(xs), post_ker(xs))))
-    
-    
-    output_filename = f"{file_address}Gate_Post_Qubit{interested_qubit}.csv"
-    np.savetxt(output_filename, post_lambdas, delimiter=",")
-
-    # Defining matplotlib width and height here as in the preamble for clarity
-    width, height = 10, 6 
-    
-    plt.figure(figsize=(width, height), dpi=120, facecolor='white')
-    plt.plot(xsd, d_ker(xsd), color='Red', linestyle='dashed', linewidth=3, label=r'$\pi^{\mathrm{obs}}_{\mathcal{D}}$')
-    plt.plot(xsd, post_ker(xsd), color='Blue', label=r'$\pi_{\mathcal{D}}^{Q(\mathrm{post})}$')
-    plt.xlabel('Pr(Meas. 0)')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(file_address + 'QoI-Qubit%g.pdf' % interested_qubit)
-    plt.show()
-    
-    plt.figure(figsize=(width, height), dpi=100, facecolor='white')
-    eps_vals = post_lambdas[:, 2]
-    eps_ker = ss.gaussian_kde(eps_vals)
-    eps_line = np.linspace(np.min(eps_vals), np.max(eps_vals), 1000)
-    
-    plt.plot(eps_line * 0.5, eps_ker(eps_line), color='Blue') 
-    plt.ticklabel_format(axis="x", style="sci", scilimits=(-5, 1))
-    plt.xlabel(r'$\epsilon_g$')
-    plt.ylabel('Density')
-    plt.tight_layout()
-    plt.savefig(file_address + 'Eps-Qubit%g.pdf' % interested_qubit)
-    plt.show()
-    
-    return prior_lambdas, post_lambdas
-
-
 def read_data(interested_qubit, gate_type, gate_num, file_address=''):
     """Read out bit string data from csv file generated by collect_filter_data().
 
@@ -575,70 +364,70 @@ def read_data(interested_qubit, gate_type, gate_num, file_address=''):
 
     return cali01
 
-    # File name change from Post_Qubit{} to Gate_Post_Qubit{}
-def read_post(ideal_p0, itr,
-              shots,
-              interested_qubits,
-              gate_type,
-              gate_num,
-              file_address='', interested_qubit=0):
-    """
-        Read posteror from files
-        See output_gate() for explaintion for arguments and returns.
-    """
-    post = {}
-    for q in interested_qubits:
-        data = read_data(q, gate_type, gate_num, file_address=file_address)
-        d = getData0(data, int(itr * shots / 1024), q)
-        post_lambdas = pd.read_csv(file_address +
-                                   'Gtae_Post_Qubit{}.csv'.format(q),
-                                   header=None).to_numpy()
-        post['Qubit' + str(q)] = post_lambdas
+#     # File name change from Post_Qubit{} to Gate_Post_Qubit{}
+# def read_post(ideal_p0, itr,
+#               shots,
+#               interested_qubits,
+#               gate_type,
+#               gate_num,
+#               file_address='', interested_qubit=0):
+#     """
+#         Read posteror from files
+#         See output_gate() for explaintion for arguments and returns.
+#     """
+#     post = {}
+#     for q in interested_qubits:
+#         data = read_data(q, gate_type, gate_num, file_address=file_address)
+#         d = getData0(data, int(itr * shots / 1024), q)
+#         post_lambdas = pd.read_csv(file_address +
+#                                    'Gtae_Post_Qubit{}.csv'.format(q),
+#                                    header=None).to_numpy()
+#         post['Qubit' + str(q)] = post_lambdas
 
-        # information part
-        xs = np.linspace(0, 1, 1000)
-        xsd = np.linspace(0.2, 0.8, 1000)
-        d_ker = ss.gaussian_kde(d)
-        print('Posterior Lambda Mean', closest_average(post_lambdas))
-        print('Posterior Lambda Mode', closest_mode(post_lambdas))
-        print('0 to 1: KL-Div(pi_D^Q(post),pi_D^obs) = %6g' %
-              (ss.entropy(post_ker(xs), d_ker(xs))))
-        print('0 to 1: KL-Div(pi_D^obs,pi_D^Q(post)) = %6g' %
-              (ss.entropy(d_ker(xs), post_ker(xs))))
+#         # information part
+#         xs = np.linspace(0, 1, 1000)
+#         xsd = np.linspace(0.2, 0.8, 1000)
+#         d_ker = ss.gaussian_kde(d)
+#         print('Posterior Lambda Mean', closest_average(post_lambdas))
+#         print('Posterior Lambda Mode', closest_mode(post_lambdas))
+#         print('0 to 1: KL-Div(pi_D^Q(post),pi_D^obs) = %6g' %
+#               (ss.entropy(post_ker(xs), d_ker(xs))))
+#         print('0 to 1: KL-Div(pi_D^obs,pi_D^Q(post)) = %6g' %
+#               (ss.entropy(d_ker(xs), post_ker(xs))))
         
-        # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
-        plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-        post_qs = QoI_gate(post_lambdas, ideal_p0, gate_num)
-        post_ker = ss.gaussian_kde(post_qs)
-        plt.plot(xsd,
-                 d_ker(xsd),
-                 color='Red',
-                 linestyle='dashed',
-                 linewidth=3,
-                 label='Observed QoI')
-        plt.plot(xsd, post_ker(xsd), color='Blue', label='QoI by Posterior')
-        plt.xlabel('Pr(Meas. 0)')
-        plt.ylabel('Density')
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(file_address + 'QoI-Qubit%g.pdf' % interested_qubit)
-        plt.show()
+#         # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
+#         plt.figure(figsize=(width,height), dpi=100, facecolor='white')
+#         post_qs = QoI_gate(post_lambdas, ideal_p0, gate_num)
+#         post_ker = ss.gaussian_kde(post_qs)
+#         plt.plot(xsd,
+#                  d_ker(xsd),
+#                  color='Red',
+#                  linestyle='dashed',
+#                  linewidth=3,
+#                  label='Observed QoI')
+#         plt.plot(xsd, post_ker(xsd), color='Blue', label='QoI by Posterior')
+#         plt.xlabel('Pr(Meas. 0)')
+#         plt.ylabel('Density')
+#         plt.legend()
+#         plt.tight_layout()
+#         plt.savefig(file_address + 'QoI-Qubit%g.pdf' % interested_qubit)
+#         plt.show()
         
-        # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
-        plt.figure(figsize=(width,height), dpi=120, facecolor='white')
-        eps_ker = ss.gaussian_kde(post_lambdas[:, 2])
-        eps_line = np.linspace(
-            np.min(post_lambdas, axis=0)[2],
-            np.max(post_lambdas, axis=0)[2], 1000)
-        plt.plot(eps_line, eps_ker(eps_line), color='Blue')
-        plt.ticklabel_format(axis="x", style="sci", scilimits=(-5, 1))
-        plt.xlabel(r'$\epsilon_g$')
-        plt.ylabel('Density')
-        plt.tight_layout()
-        plt.savefig(file_address + 'Eps-Qubit%g.pdf' % interested_qubit)
-        plt.show()
+#         # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
+#         plt.figure(figsize=(width,height), dpi=120, facecolor='white')
+#         eps_ker = ss.gaussian_kde(post_lambdas[:, 2])
+#         eps_line = np.linspace(
+#             np.min(post_lambdas, axis=0)[2],
+#             np.max(post_lambdas, axis=0)[2], 1000)
+#         plt.plot(eps_line, eps_ker(eps_line), color='Blue')
+#         plt.ticklabel_format(axis="x", style="sci", scilimits=(-5, 1))
+#         plt.xlabel(r'$\epsilon_g$')
+#         plt.ylabel('Density')
+#         plt.tight_layout()
+#         plt.savefig(file_address + 'Eps-Qubit%g.pdf' % interested_qubit)
+#         plt.show()
 
-    return post
+#     return post
 
 
 def plotComparsion(data, post_lambdas, q, file_address=''):
@@ -873,11 +662,13 @@ class SplitGateFilter:
                  interested_qubits,
                  gate_num,
                  gate_type,
-                 device_param_address='',
-                 data_file_address=''):
-        self.interested_qubits = interested_qubits
-        self.device_param_address = device_param_address
+                 work_dir='./',
+                 meas_cal_dir=None,
+                 data_file_address='./data/'):
+        self.work_dir = work_dir
+        self.meas_cal_dir = meas_cal_dir if meas_cal_dir else work_dir
         self.data_file_address = data_file_address
+        self.interested_qubits = interested_qubits
         self.gate_type = gate_type
         self.gate_num = gate_num
         self.params = None
@@ -897,6 +688,42 @@ class SplitGateFilter:
         for q in self.interested_qubits:
             res['Qubit' + str(q)] = closest_mode(self.post['Qubit' + str(q)])
         return res
+    
+    def load_informed_priors(self, qubit_idx, n_samples, seed):
+        """
+        Loads measurement posteriors from splitmeasfilter files and resamples them.
+        Returns columns for P(meas 0|prep 0) and P(meas 1|prep 1).
+        """
+        try:
+            # Construct paths based on splitmeasfilter naming convention
+            # We need the directory where splitmeasfilter saved its results
+            # Assuming file_address points to that shared directory
+            file_0 = f"{self.data_file_address}State0_Post_Qubit{qubit_idx}.csv"
+            file_1 = f"{self.data_file_address}State1_Post_Qubit{qubit_idx}.csv"
+            
+            # Load raw samples (Use pandas as in splitmeasfilter for robustness)
+            # These files contain 1D arrays of "Success Rates"
+            post_0 = pd.read_csv(file_0, header=None).values.flatten()
+            post_1 = pd.read_csv(file_1, header=None).values.flatten()
+            
+            # Create KDEs
+            kde_0 = ss.gaussian_kde(post_0)
+            kde_1 = ss.gaussian_kde(post_1)
+            
+            # Resample to match the required N priors
+            # .resample() returns shape (1, N), so we flatten
+            col_0 = kde_0.resample(n_samples, seed=seed).flatten()
+            col_1 = kde_1.resample(n_samples, seed=seed).flatten()
+            
+            # Enforce physical constraints [0, 1]
+            col_0 = np.clip(col_0, 0.0, 1.0)
+            col_1 = np.clip(col_1, 0.0, 1.0)
+            
+            return col_0, col_1
+        
+        except (FileNotFoundError, IOError):
+            print(f"Warning: Measurement calibration not found for Q{qubit_idx} at {self.data_file_address}")
+            return None, None
 
     def inference(self,
                   nPrior=40000,
@@ -904,7 +731,8 @@ class SplitGateFilter:
                   gate_sd=0.01,
                   seed=127,
                   shots_per_point=1024,
-                  write_data_for_SB=False):
+                  use_informed_priors=True,
+                  plotting=True):
         """
           Same as output_gate().
 
@@ -937,31 +765,151 @@ class SplitGateFilter:
         None.
 
         """
+        # Ensure params are loaded (taken from existing logic)
+        if self.params is None:
+             # Fallback logic or error if params are needed for data shaping
+             pass 
 
-        itr = self.params[0]['itr']
-        shots = self.params[0]['shots']
-        info = {}
-        for i in self.interested_qubits:
-            print('Qubit %d' % (i))
-            data = read_data(i,
-                             self.gate_type,
-                             self.gate_num,
-                             file_address=self.data_file_address)
-            d = getData0(data, int(itr * shots / shots_per_point), i)
-            _, post_lambdas = output_gate(d,
-                                          i,
-                                          nPrior,
-                                          self.params,
-                                          gate_sd,
-                                          meas_sd,
-                                          self.gate_type,
-                                          self.gate_num,
-                                          file_address=self.data_file_address)
-            self.post['Qubit' + str(i)] = post_lambdas
+        # Main Loop over Qubits
+        for q in self.interested_qubits:
+            print(f'--- Inferring Gate Errors for Qubit {q} ---')
+            
+            # Load Observed Data
+            raw_data = read_data(q, self.gate_type, self.gate_num, 
+                                 file_address=self.data_file_address)
+            
+            # Calculate QoI (Probability of Measuring 0)
+            num_points = int(len(raw_data) / shots_per_point) 
+            d_obs = getData0(raw_data, num_points, q)
+            
+            # Construct Prior Matrix [M x 3]
+            prior_lambdas = np.zeros((nPrior, 3))
+            
+            # --- Measurement Error Columns (p(0|0) & p(1|1)) ---
+            loaded_priors = False
+            if use_informed_priors:
+                p0_col, p1_col = self.load_informed_priors(q, nPrior, seed)
+                if p0_col is not None:
+                    prior_lambdas[:, 0] = p0_col
+                    prior_lambdas[:, 1] = p1_col
+                    loaded_priors = True
+                    print(f"-> Successfully injected informed measurement priors.")
+
+            if not loaded_priors:
+                # Fallback to Uninformed (Gaussian around calibration/default)
+                print(f'-> Using uninformed Gaussian priors for measurement. 5% error assumed.')
+                prior_lambdas[:, 0] = tnorm01(0.95, meas_sd, size=nPrior) # Default 5% error
+                prior_lambdas[:, 1] = tnorm01(0.95, meas_sd, size=nPrior)
+
+            # --- Gate Error {Column (2)} ---
+            # We always generate this using the calibration data as an uncertain prior
+            # Retrieve calibration center using existing helper
+            try:
+                cal_data = data_readout(q, datafile=self.meas_cal_dir)
+                gate_center = cal_data[2] # 3rd element is gate error
+            except:
+                gate_center = 0.001 # Conservative default
+                print(f"Warning: Could not read calibration data for gate error on Q{q}. Using default {gate_center}.")
+            
+            prior_lambdas[:, 2] = tnorm01(gate_center, gate_sd, size=nPrior)
+
+            # Run Rejection Sampling
+            # INLINING is often cleaner for "Split" filters to avoid passing 10+ args.
+            
+            # Calculate Densities
+            d_ker = ss.gaussian_kde(d_obs)
+            qs = QoI_gate(prior_lambdas, self.gate_type, self.gate_num)
+            qs_ker = ss.gaussian_kde(qs)
+            
+            # Find Maximum Ratio (Optimization)
+            # Uses existing helper findM
+            max_r, max_q = findM(qs_ker, d_ker, prep_state='0') # Gate exp usually targets 0 or 1, check logic
+
+            print('Final Accepted Posterior Lambdas')
+            print('M: %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
+            (max_r, max_q, d_ker(max_q), qs_ker(max_q)))
+            
+            # Rejection Sampling
+            r_vals = d_ker(qs) / qs_ker(qs)
+            eta = r_vals / max_r
+            accept_mask = eta > np.random.uniform(0, 1, nPrior)
+            post_lambdas = prior_lambdas[accept_mask]
+            
+            # Save and Store
+            self.post['Qubit' + str(q)] = post_lambdas
+            
+            # Save to CSV (Compatible with existing format)
+            filename = f"{self.data_file_address}Gate_Post_Qubit{i}.csv"
+            np.savetxt(filename, post_lambdas, delimiter=',')
+            print(f"-> Saved {len(post_lambdas)} posterior samples to {filename}")
+
+            if plotting:
+                post_qs = QoI_gate(post_lambdas, self.gate_type, self.gate_num) 
+                post_ker = ss.gaussian_kde(post_qs)
+
+                # Integration for validation (Riemann Sum)
+                xs = np.linspace(0, 1, 1000)
+                xsd = np.linspace(0.1, 0.9, 1000)
+                
+                # Vectorised integration calculation 
+                q_eval = xs[:-1]
+                pdf_vals = qs_ker(q_eval)
+                # Avoid division by zero if pdf is 0
+                valid_indices = pdf_vals > 0
+                
+                r_int = np.zeros_like(q_eval)
+                r_int[valid_indices] = d_ker(q_eval[valid_indices]) / pdf_vals[valid_indices]
+                
+                delta_x = xs[1:] - xs[:-1]
+                I = np.sum(r_int * pdf_vals * delta_x)
+
+                print('Accepted Number N: %d, fraction %.3f' %
+                    (post_lambdas.shape[0], post_lambdas.shape[0] / M))
+                print('I(pi^post_Lambda) = %.5g' % I)
+                
+                # Assuming closest_average and closest_mode are defined externally
+                print('Posterior Lambda Mean', closest_average(post_lambdas))
+                print('Posterior Lambda Mode', closest_mode(post_lambdas))
+
+                print('0 to 1: KL-Div(pi_D^Q(post),pi_D^obs) = %6g' %
+                    (ss.entropy(post_ker(xs), d_ker(xs))))
+                print('0 to 1: KL-Div(pi_D^obs,pi_D^Q(post)) = %6g' %
+                    (ss.entropy(d_ker(xs), post_ker(xs))))
+
+
+                output_filename = f"{self.work_dir}Gate_Post_Qubit{q}.csv"
+                np.savetxt(output_filename, post_lambdas, delimiter=",")
+
+                # Defining matplotlib width and height here as in the preamble for clarity
+                width, height = 10, 6 
+                
+                plt.figure(figsize=(width, height), dpi=120, facecolor='white')
+                plt.plot(xsd, d_ker(xsd), color='Red', linestyle='dashed', linewidth=3, label=r'$\pi^{\mathrm{obs}}_{\mathcal{D}}$')
+                plt.plot(xsd, post_ker(xsd), color='Blue', label=r'$\pi_{\mathcal{D}}^{Q(\mathrm{post})}$')
+                plt.xlabel('Pr(Meas. 0)')
+                plt.ylabel('Density')
+                plt.legend()
+                plt.tight_layout()
+                plt.savefig(self.work_dir + 'QoI-Qubit%g.pdf' % q)
+                plt.show()
+                
+                plt.figure(figsize=(width, height), dpi=100, facecolor='white')
+                eps_vals = post_lambdas[:, 2]
+                eps_ker = ss.gaussian_kde(eps_vals)
+                eps_line = np.linspace(np.min(eps_vals), np.max(eps_vals), 1000)
+                
+                plt.plot(eps_line * 0.5, eps_ker(eps_line), color='Blue') 
+                plt.ticklabel_format(axis="x", style="sci", scilimits=(-5, 1))
+                plt.xlabel(r'$\epsilon_g$')
+                plt.ylabel('Density')
+                plt.tight_layout()
+                plt.savefig(self.work_dir + 'Eps-Qubit%g.pdf' % q)
+                plt.show()
+
+        # Finalize stats
         self.modes = self.mode()
         self.means = self.mean()
         
-        # File name change from Post_Qubit{} to Gate_Post_Qubit{}
     def post_from_file(self):
         """
           Read posterior from file directly if inference() is already run once.
