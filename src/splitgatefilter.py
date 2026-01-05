@@ -937,7 +937,6 @@ class SplitGateFilter:
         None.
 
         """
-        self.params = read_params(self.device_param_address)
 
         itr = self.params[0]['itr']
         shots = self.params[0]['shots']
