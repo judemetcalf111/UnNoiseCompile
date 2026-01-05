@@ -5,6 +5,7 @@ Created on Wed Dec 31 13:18:38 2025
 @author: Jude L. Metcalf
 """
 # Qiskit
+import os
 from qiskit import QuantumCircuit, transpile
 from braket.aws import AwsDevice
 
@@ -900,7 +901,9 @@ class SplitMeasFilter:
           Not None after execute inference()
           
     """
-    def __init__(self, qubit_order, data=None, file_address='data/'):
+    def __init__(self, qubit_order, home_dir, data=None, file_address='data/'):
+        self.home_dir = home_dir
+        os.chdir(home_dir)
         self.file_address = file_address
         self.qubit_order = qubit_order
         
@@ -913,20 +916,38 @@ class SplitMeasFilter:
         self.mat_mode = None
 
         # Load Data
-        if data is not None and len(data) > 0:
-            self.data = np.atleast_1d(data)
+        self.data = {'0': np.array([]), '1': np.array([])}
+
+        if data is not None:
+            # If user passes data directly, assume it's a dict or handle accordingly
+            if isinstance(data, dict):
+                self.data = data
+            else:
+                print("Warning: Direct data passed as array. Assuming it belongs to State '0'.")
+                self.data['0'] = np.atleast_1d(data)
         else:
-            self.data = self._load_data_from_file()
+            # Load from separate files
+            self._load_data_from_files()
             
-    def _load_data_from_file(self):
-        """Internal helper to load raw bitstrings safely."""
+    def _load_data_from_files(self):
+        """Loads Filter_data_0.csv and Filter_data_1.csv into the dictionary."""
+        # Load State 0
         try:
-            # Use pandas for robust CSV reading
-            path = self.file_address + 'Filter_data.csv'
-            df = pd.read_csv(path, header=None, dtype=str)
-            return df.values.flatten()
+            path0 = self.file_address + 'Filter_data_0.csv'
+            df0 = pd.read_csv(path0, header=None, dtype=str)
+            self.data['0'] = df0.values.flatten()
+            print(f"Loaded {len(self.data['0'])} shots for State 0.")
         except (FileNotFoundError, pd.errors.EmptyDataError):
-            return np.array([])
+            print(f"Warning: {path0} not found. State 0 inference will fail.")
+
+        # Load State 1
+        try:
+            path1 = self.file_address + 'Filter_data_1.csv'
+            df1 = pd.read_csv(path1, header=None, dtype=str)
+            self.data['1'] = df1.values.flatten()
+            print(f"Loaded {len(self.data['1'])} shots for State 1.")
+        except (FileNotFoundError, pd.errors.EmptyDataError):
+            print(f"Warning: {path1} not found. State 1 inference will fail.")
         
     def create_filter_mat(self):
         """
@@ -968,7 +989,7 @@ class SplitMeasFilter:
 
     def inference(self,
                   nPrior=40000,
-                  Priod_sd=0.1,
+                  prior_sd=0.1,
                   seed=227,
                   shots_per_point=1024,
                   prep_state='0'):
@@ -980,7 +1001,7 @@ class SplitMeasFilter:
         nPrior : int, optional
             Number of priors required. The default is 40000.
             Same as M in output().
-        Priod_sd : float, optional
+        prior_sd : float, optional
             standard deviation for truncated normal distribution 
             when generating prior parameters. The default is 0.1.
             Same as prior_sd in output().
@@ -1052,7 +1073,7 @@ class SplitMeasFilter:
                 i,
                 nPrior,
                 self.params,
-                Priod_sd,
+                prior_sd,
                 seed=seed,
                 file_address=state_prefix,
                 prep_state=prep_state)
