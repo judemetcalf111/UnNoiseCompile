@@ -407,61 +407,6 @@ def find_mode(data):
     return line[np.argmax(kde(line))]
 
 
-# def closest_mode(post_lambdas):
-#     """Find the tuple of model parameters that closed to 
-#        the Maximum A Posteriori (MAP) of 
-#        posterior distribution of each parameter
-
-#     Args:
-#       post_lambdas: numpy array
-#         an n-by-m array where n is the number of posteriors and m is number 
-#         of parameters in the model
-
-#     Returns: numpy array
-#       an array that contains the required model parameters.
-#     """
-
-#     mode_lam = []
-#     for j in range(post_lambdas.shape[1]):
-#         mode_lam.append(find_mode(post_lambdas[:, j]))
-
-#     sol = np.array([])
-#     smallest_norm = nl.norm(post_lambdas[0])
-#     mode_lam = np.array(mode_lam)
-#     for lam in post_lambdas:
-#         norm_diff = nl.norm(lam - mode_lam)
-#         if norm_diff < smallest_norm:
-#             smallest_norm = norm_diff
-#             sol = lam
-#     return sol
-
-
-# def closest_average(post_lambdas):
-    """Find the tuple of model parameters that closed to 
-       the mean of posterior distribution of each parameter
-
-    Args:
-      post_lambdas: numpy array
-        an n-by-m array where n is the number of posteriors and m is number 
-        of parameters in the model
-
-    Returns: numpy array
-      an array that contains the required model parameters.
-    """
-    sol = np.array([])
-    smallest_norm = nl.norm(post_lambdas[0])
-
-    ave_lam = np.mean(post_lambdas, axis=0)
-
-    for lam in post_lambdas:
-        norm_diff = nl.norm(lam - ave_lam)
-
-        if norm_diff < smallest_norm:
-            smallest_norm = norm_diff
-            sol = lam
-    return sol
-
-
 def dictToVec(nQubits, counts):
     """ Transfer counts to vec
 
@@ -655,59 +600,59 @@ def getData0(data, num_group, interested_qubit):
     
     return prob0
 
-def QoI(prior_lambdas, prep_state='0'):
-    """
-    Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
+# def QoI(prior_lambdas, prep_state='0'):
+#     """
+#     Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
 
-    Parameters
-    ----------
-    prior_lambdas : numpy array
-        each subarray is an individual prior lambda.
+#     Parameters
+#     ----------
+#     prior_lambdas : numpy array
+#         each subarray is an individual prior lambda.
 
-    prep_state : string, optional
-        The state prepared to, 
+#     prep_state : string, optional
+#         The state prepared to, 
 
-    Returns
-    -------
-    qs : numpy array
-        QoI's. Here they are the probability of measuring 0 with each given
-        prior lambdas in prior_lambdas.
+#     Returns
+#     -------
+#     qs : numpy array
+#         QoI's. Here they are the probability of measuring 0 with each given
+#         prior lambdas in prior_lambdas.
 
-    """
-    num_samples = prior_lambdas.shape[0]
+#     """
+#     num_samples = prior_lambdas.shape[0]
 
-    # Define Ideal Vector based on what we prepared
-    if prep_state == '0':
-        # [Prob(0), Prob(1)] -> [100%, 0%]
-        M_ideal = np.array([[1.0, 0.0]]*num_samples) 
-    elif prep_state == '1':
-        # [Prob(0), Prob(1)] -> [0%, 100%]
-        M_ideal = np.array([[0.0, 1.0]]*num_samples) 
-    else: # Default to '+'
-        print('Default to |+>, set prep_state = "0" or "1" for these preparations.')
-        M_ideal = np.array([[0.5, 0.5]]*num_samples) 
+#     # Define Ideal Vector based on what we prepared
+#     if prep_state == '0':
+#         # [Prob(0), Prob(1)] -> [100%, 0%]
+#         M_ideal = np.array([[1.0, 0.0]]*num_samples) 
+#     elif prep_state == '1':
+#         # [Prob(0), Prob(1)] -> [0%, 100%]
+#         M_ideal = np.array([[0.0, 1.0]]*num_samples) 
+#     else: # Default to '+'
+#         print('Default to |+>, set prep_state = "0" or "1" for these preparations.')
+#         M_ideal = np.array([[0.5, 0.5]]*num_samples) 
 
-    # Vectorised Forward noising place of previous errMitMat()
+#     # Vectorised Forward noising place of previous errMitMat()
 
-    pm0p0 = prior_lambdas[:, 0]
-    pm1p1 = prior_lambdas[:, 1]
+#     pm0p0 = prior_lambdas[:, 0]
+#     pm1p1 = prior_lambdas[:, 1]
 
-    A_batch = np.zeros((num_samples, 2, 2))
+#     A_batch = np.zeros((num_samples, 2, 2))
 
-    # Row 0
-    A_batch[:, 0, 0] = pm0p0
-    A_batch[:, 0, 1] = 1 - pm1p1
+#     # Row 0
+#     A_batch[:, 0, 0] = pm0p0
+#     A_batch[:, 0, 1] = 1 - pm1p1
     
-    # Row 1
-    A_batch[:, 1, 0] = 1 - pm0p0
-    A_batch[:, 1, 1] = pm1p1
+#     # Row 1
+#     A_batch[:, 1, 0] = 1 - pm0p0
+#     A_batch[:, 1, 1] = pm1p1
 
-    M_observed = A_batch @ M_ideal
+#     M_observed = A_batch @ M_ideal
     
-    # The result is the Probability of Measuring 0 (First component)
-    qs = M_observed[:, 0, 0]
+#     # The result is the Probability of Measuring 0 (First component)
+#     qs = M_observed[:, 0, 0]
 
-    return qs
+#     return qs
 
 
 def dq(x, qs_ker, d_ker):
@@ -857,9 +802,17 @@ def output(d,
     if prior_mean > 1.0 or prior_mean < 0.7:
         prior_mean = 0.95
 
-    prior_lambdas = tnorm01(prior_mean, prior_sd, size=M) # 1D single lambda array of size M
+    success_rates = tnorm01(prior_mean, prior_sd, size=M) # 1D single lambda array of size M
 
-    qs = QoI_single(prior_lambdas, prep_state=prep_state) # Single lambda QoI, optimising to find e0 and e1 separately
+    # Map fidelity to the observable (Probability of Measuring 0)
+    if prep_state == '0':
+        prob_meas_0 = success_rates
+    elif prep_state == '1':
+        prob_meas_0 = 1.0 - success_rates
+    else:
+        raise ValueError('prep_state must be "0" or "1".')
+    
+    qs = QoI_single(success_rates, prep_state=prep_state) # Single lambda QoI, optimising to find e0 and e1 separately
 
     d_ker = ss.gaussian_kde(d)
     qs_ker = ss.gaussian_kde(qs)
@@ -875,25 +828,25 @@ def output(d,
     print(r'$\mu$' + f': %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
           (max_r, max_q, d_ker(max_q), qs_ker(max_q)))
 
-    post_lambdas = np.array([])
+    post_success_rates = np.array([])
     # Rejection Iteration (vectorized!)
     r_vals = d_ker(qs) / qs_ker(qs)
     eta = r_vals / max_r 
 
     # Accept based on uniform random draw
     accept_mask = eta > np.random.uniform(0, 1, M)
-    post_lambdas = prior_lambdas[accept_mask]
-    
-    post_qs = QoI_single(post_lambdas, prep_state=prep_state)
+    post_success_rates = success_rates[accept_mask]
+
+    post_qs = QoI_single(post_success_rates, prep_state=prep_state)
     post_ker = ss.gaussian_kde(post_qs)
 
     # Logging
-    print('Accepted N: %d (%.1f%%)' % (len(post_lambdas), 100*len(post_lambdas)/M))
-    print(f'Posterior Mean for preparing {prep_state}: success rate ~ {np.mean(post_lambdas):.6f}')
+    print('Accepted N: %d (%.1f%%)' % (len(post_success_rates), 100*len(post_success_rates)/M))
+    print(f'Posterior Mean for preparing {prep_state}: success rate ~ {np.mean(post_success_rates):.6f}')
 
     # Save results as a 1D array
     filename = file_address + f'Post_Qubit{interested_qubit}.csv'
-    np.savetxt(filename, post_lambdas, delimiter=',')
+    np.savetxt(filename, post_success_rates, delimiter=',')
 
     # --------------------- Plotting ---------------------
     xs = np.linspace(0, 1, 1000)
@@ -917,7 +870,7 @@ def output(d,
     plt.savefig(file_address + f'QoI-Qubit{interested_qubit}.pdf')
     plt.show()
 
-    return prior_lambdas, post_lambdas
+    return success_rates, post_success_rates
 
 
 class SplitMeasFilter:
