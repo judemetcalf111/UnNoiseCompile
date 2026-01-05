@@ -12,7 +12,8 @@ Project_Root/
 │   ├── notebook1.ipynb
 │   └── notebook2.ipynb        <-- Any notebooks to run scripts, gather AWS data, inference, etc.
 │
-├── scripts/
+├── src/
+│   ├── __init__.py
 │   ├── splitmeasfilter.py     <-- Measurement Error & Inference
 │   └── splitgatefilter.py     <-- Gate Error & Inference, Incorporating Measurement Errors from splitmeasfilter.py
 │
