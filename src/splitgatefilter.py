@@ -28,6 +28,60 @@ from matplotlib.pyplot import figure
 width = 6.72 # plot width
 height = 4.15 # plot height
 
+def closest_mode(post_lambdas):
+    """Find the tuple of model parameters that closed to 
+       the Maximum A Posteriori (MAP) of 
+       posterior distribution of each parameter
+
+    Args:
+      post_lambdas: numpy array
+        an n-by-m array where n is the number of posteriors and m is number 
+        of parameters in the model
+
+    Returns: numpy array
+      an array that contains the required model parameters.
+    """
+
+    mode_lam = []
+    for j in range(post_lambdas.shape[1]):
+        mode_lam.append(find_mode(post_lambdas[:, j]))
+
+    sol = np.array([])
+    smallest_norm = nl.norm(post_lambdas[0])
+    mode_lam = np.array(mode_lam)
+    for lam in post_lambdas:
+        norm_diff = nl.norm(lam - mode_lam)
+        if norm_diff < smallest_norm:
+            smallest_norm = norm_diff
+            sol = lam
+    return sol
+
+
+def closest_average(post_lambdas):
+    """Find the tuple of model parameters that closed to 
+       the mean of posterior distribution of each parameter
+
+    Args:
+      post_lambdas: numpy array
+        an n-by-m array where n is the number of posteriors and m is number 
+        of parameters in the model
+
+    Returns: numpy array
+      an array that contains the required model parameters.
+    """
+    sol = np.array([])
+    smallest_norm = nl.norm(post_lambdas[0])
+
+    ave_lam = np.mean(post_lambdas, axis=0)
+
+    for lam in post_lambdas:
+        norm_diff = nl.norm(lam - ave_lam)
+
+        if norm_diff < smallest_norm:
+            smallest_norm = norm_diff
+            sol = lam
+    return sol
+
 
 ######################## For Parameter Characterzation ########################
 def gate_circ(nGates, gate_type, interested_qubit, itr, backend):
@@ -679,26 +733,107 @@ def find_least_norm_gate(ptilde):
     return sol['status'], sol['x']
 
 
-def gate_denoise(m, p0s, lambdas):
+def gate_denoise_vectorised(m, p0s, prior_lambdas):
     """
-        Complete function for filter gate and measurement errors.
+    Vectorised implementation of gate_denoise_vectorised.
+    Performs Linear Inversion method for error mitigation on a batch of noise parameters.
 
+    Parameters
+    ----------
+    m : int
+        Number of gates (depth).
+    p0s : numpy array or float
+        Observed probabilities of measuring 0. 
+        If it is a single float, it is broadcast against all prior_lambdas.
+        If it is an array, it must match the length of prior_lambdas (or be broadcastable).
+    prior_lambdas : numpy array
+        Shape (N, 3). Each row is [p(0|0), p(1|1), gate_error_eps].
+
+    Returns
+    -------
+    denoised_p0 : numpy array
+        The denoised probabilities corresponding to each lambda sample.
     """
-    denoised = []
-    meas_err_mat = errMitMat([lambdas[0], lambdas[1]])
-    M = gate_matrix(1, lambdas[2], m)
-    for p0 in p0s:
-        ptilde = np.array([p0, 1 - p0])
-        gate_ptilde = np.linalg.solve(meas_err_mat, ptilde)
-        phat = np.linalg.solve(M, gate_ptilde)
-        status, opt_phat = find_least_norm_gate(phat)
-        opt_recovered_p0 = opt_phat[0] + opt_phat[1] * (-1)**(
-            1 * 0)  # phat(0) + phat(1)
-        opt_recovered_p1 = opt_phat[0] + opt_phat[1] * (-1)**(
-            1 * 1)  # phat(0) - phat(1)
-        denoised.append(opt_recovered_p0)
+    
+    # Extract parameters for clarity
+    # Shape: (N,)
+    pm0p0 = prior_lambdas[:, 0]  # Readout Fidelity 0->0
+    pm1p1 = prior_lambdas[:, 1]  # Readout Fidelity 1->1
+    eps   = prior_lambdas[:, 2]  # Gate error parameter
+    
+    num_samples = prior_lambdas.shape[0]
 
-    return denoised
+    # Construct the Measurement Error Matrix Batch (A_batch)
+    # Matrix A = [[ p(0|0),  p(0|1) ],
+    #             [ p(1|0),  p(1|1) ]]
+    #          = [[ pm0p0,   1-pm1p1],
+    #             [ 1-pm0p0, pm1p1  ]]
+    
+    A_batch = np.zeros((num_samples, 2, 2))
+    
+    # Row 0
+    A_batch[:, 0, 0] = pm0p0
+    A_batch[:, 0, 1] = 1 - pm1p1
+    
+    # Row 1
+    A_batch[:, 1, 0] = 1 - pm0p0
+    A_batch[:, 1, 1] = pm1p1
+    
+    # Construct the Gate Error Matrix Batch (M_batch)
+    # Based on the logic in gate_matrix with length=1
+    # M = [[ 1,  (1-eps)^m ],
+    #      [ 1, -(1-eps)^m ]]
+    
+    # Calculate the decay factor for all samples
+    eta = (1 - eps) ** m
+    
+    M_batch = np.zeros((num_samples, 2, 2))
+    
+    # Column 0 is always 1s
+    M_batch[:, 0, 0] = 1.0
+    M_batch[:, 1, 0] = 1.0
+    
+    # Column 1 depends on eta
+    M_batch[:, 0, 1] = eta
+    M_batch[:, 1, 1] = -eta
+
+    # 4. Combine Matrices (Total Error Matrix)
+    # The system is: A @ M @ phat = p_observed
+    # Let T = A @ M
+    T_batch = A_batch @ M_batch
+    
+    # 5. Prepare the Observed Vector (RHS)
+    # p_observed = [[p0], [p1]]
+    # Ensure p0s is an array for broadcasting
+    p0s = np.array(p0s) 
+    
+    # If p0s is scalar, this broadcasts to (N,). 
+    # If p0s matches N, it works directly.
+    obs_p0 = p0s
+    obs_p1 = 1 - p0s
+    
+    # Stack to create (N, 2) vector: [[p0_1, p1_1], [p0_2, p1_2], ...]
+    # We need shape (N, 2, 1) for matrix solve, or (N, 2) works with np.linalg.solve
+    y_batch = np.stack([obs_p0, obs_p1], axis=-1)
+    
+    # 6. Solve Linear System
+    # Solves T * x = y for x
+    # This replaces the two separate linalg.solve calls with one combined batch solve
+    phat = np.linalg.solve(T_batch, y_batch)
+    
+    # 7. Reconstruct P0
+    # The original code logic for reconstruction:
+    # opt_recovered_p0 = phat[0] + phat[1]
+    # (Because phat are spectral coefficients, not raw probabilities yet)
+    
+    raw_denoised_p0 = phat[:, 0] + phat[:, 1]
+    
+    # Optional: Simple Clipping (Vectorized "Least Norm")
+    # This ensures results stay within [0, 1], roughly approximating the 
+    # constraint of find_least_norm_gate without the loop overhead.
+    denoised_p0 = np.clip(raw_denoised_p0, 0, 1)
+    
+    return denoised_p0
 
 
 ########################## Class for Error Filtering ########################
@@ -862,7 +997,9 @@ class SplitGateFilter:
             p0s w/o gate and measurment error.
 
         """
-        return gate_denoise(self.gate_num, p0s,
+        if self.means is None:
+            raise RuntimeError("Posterior means not initialized. Call inference() or post_from_file() first.")
+        return gate_denoise_vectorised(self.gate_num, p0s,
                             self.means['Qubit' + str(qubit_index)])
 
     def filter_mode(self, p0s, qubit_index):
@@ -882,5 +1019,7 @@ class SplitGateFilter:
             p0s w/o gate and measurment error.
 
         """
-        return gate_denoise(self.gate_num, p0s,
+        if self.modes is None:
+            raise RuntimeError("Posterior modes not initialized. Call inference() or post_from_file() first.")
+        return gate_denoise_vectorised(self.gate_num, p0s,
                             self.modes['Qubit' + str(qubit_index)])
