@@ -69,7 +69,7 @@ We can then run inference on this data. Ensure that you track the number of shot
 # Applying the meas_filter.inference() function, on batches of size shots_per_point
 # The 'prep_state' variable can be '0' or '1', and enters the prepared state, either
 # 0 or 1, and thus defines the error rate tested for.
-meas_filter.inference(nPrior=40000, Prior_sd=0.1, shots_per_point=1024, seed=28, prep_state='0')
+meas_filter.inference(nPrior=40000, prior_sd=0.1, shots_per_point=1024, seed=28, prep_state='0')
 ```
 
 This will produce files `State0_Post_Qubit0.csv`, `State0_Post_Qubit1.csv`, and `State0_Post_Qubit6.csv`, which contain the posterior distributions of measurement errors, in the form of rejection-sampled error rates. This will output plots of observed data against the posterior model. To reproduce these, along with the distribution statistics, and optionally save, run:
