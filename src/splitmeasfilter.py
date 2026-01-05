@@ -900,7 +900,7 @@ class SplitMeasFilter:
           Not None after execute inference()
           
     """
-    def __init__(self, qubit_order, data=None, file_address=''):
+    def __init__(self, qubit_order, data=None, file_address='data/'):
         self.file_address = file_address
         self.qubit_order = qubit_order
         
@@ -921,7 +921,7 @@ class SplitMeasFilter:
     def _load_data_from_file(self):
         """Internal helper to load raw bitstrings safely."""
         try:
-            # Use pandas for robust CSV reading (handles newlines/headers better)
+            # Use pandas for robust CSV reading
             path = self.file_address + 'Filter_data.csv'
             df = pd.read_csv(path, header=None, dtype=str)
             return df.values.flatten()
