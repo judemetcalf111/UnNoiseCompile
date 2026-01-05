@@ -5,23 +5,21 @@ A repository for developing _scalable_ and hardware-aware quantum compilation to
 
 Much of this repository is built on proper management of experimental data gathered from probe circuits to be used on QPUs. As such, folder management and organistaion is crucial. The following is strongly suggested to ensure that the functions run smoothly without too much manipulation of subfolders:
 
-Project_Root/
-│
-├── notebooks/
-│   ├── notebook1.ipynb
-│   └── notebook2.ipynb.     <-- Any notebooks to run scripts, gather AWS data, inference, etc.
-│
-├── scripts/
-│   ├── splitmeasfilter.py   <-- Measurement Error & Inference
-│   └── splitgatefilter.py   <-- Gate Error & Inference, Incoroporating Measurement Errors from splitmeasfilter.py
-│
-├── data/
-│   ├── meas_cal/            <-- Output folder for MeasFilter
-│   └── gate_exp/            <-- Output folder for GateFilter
-│
-└── results/                 <-- Final plots and reports
-
-The 
+Project_Root/  
+│  
+├── notebooks/  
+│   ├── notebook1.ipynb  
+│   └── notebook2.ipynb.     <-- Any notebooks to run scripts, gather AWS data, inference, etc.  
+│  
+├── scripts/  
+│   ├── splitmeasfilter.py   <-- Measurement Error & Inference  
+│   └── splitgatefilter.py   <-- Gate Error & Inference, Incoroporating Measurement Errors from splitmeasfilter.py  
+│  
+├── data/  
+│   ├── meas_cal/            <-- Output folder for MeasFilter  
+│   └── gate_exp/            <-- Output folder for GateFilter  
+│  
+└── results/                 <-- Final plots and reports  
 
 ## Getting Started
 
