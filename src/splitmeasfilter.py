@@ -745,7 +745,7 @@ def output(d,
            interested_qubit,
            M,
            params,
-           Prior_sd,
+           prior_sd,
            seed=127,
            file_address='',
            prep_state='0'):
@@ -766,7 +766,7 @@ def output(d,
         {'pm1p0': float # Pr(Meas. 1| Prep. 0)
          'pm0p1': float # Pr(Meas. 0| Prep. 1)
          }
-    Prior_sd : float
+    prior_sd : float
         standard deviation for truncated normal distribution when generating 
         prior parameters (for measurement error).
     seed : int, optional
@@ -803,7 +803,7 @@ def output(d,
     if prior_mean > 1.0 or prior_mean < 0.7:
         prior_mean = 0.95
 
-    success_rates = tnorm01(prior_mean, Prior_sd, size=M) # 1D single lambda array of size M
+    success_rates = tnorm01(prior_mean, prior_sd, size=M) # 1D single lambda array of size M
 
     # Map fidelity to the observable (Probability of Measuring 0)
     if prep_state == '0':
