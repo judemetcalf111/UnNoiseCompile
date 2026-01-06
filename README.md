@@ -8,6 +8,10 @@ Much of this repository is built on proper management of experimental data gathe
 ```text
 Project_Root/
 │
+│
+├── setup.py                   <-- setup.py describing the version, dependencies, etc.
+│
+│
 ├── notebooks/
 │   ├── notebook1.ipynb
 │   └── notebook2.ipynb        <-- Any notebooks to run scripts, gather AWS data, inference, etc.
