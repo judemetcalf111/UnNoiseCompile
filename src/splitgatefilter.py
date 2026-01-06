@@ -18,10 +18,10 @@ import numpy.linalg as nl
 # For optimization
 from cvxopt import matrix, solvers
 
-from src import splitmeasfilter
+import src.splitmeasfilter
 import importlib
-importlib.reload(splitmeasfilter)
-from splitmeasfilter import *
+importlib.reload(src.splitmeasfilter)
+from src.splitmeasfilter import *
 # For plot
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import figure
@@ -699,8 +699,8 @@ class SplitGateFilter:
             # Construct paths based on splitmeasfilter naming convention
             # We need the directory where splitmeasfilter saved its results
             # Assuming file_address points to that shared directory
-            file_0 = f"{self.data_file_address}State0_Post_Qubit{qubit_idx}.csv"
-            file_1 = f"{self.data_file_address}State1_Post_Qubit{qubit_idx}.csv"
+            file_0 = f"{self.meas_cal_dir}State0_Post_Qubit{qubit_idx}.csv"
+            file_1 = f"{self.meas_cal_dir}State1_Post_Qubit{qubit_idx}.csv"
             
             # Load raw samples (Use pandas as in splitmeasfilter for robustness)
             # These files contain 1D arrays of "Success Rates"
@@ -723,7 +723,7 @@ class SplitGateFilter:
             return col_0, col_1
         
         except (FileNotFoundError, IOError):
-            print(f"Warning: Measurement calibration not found for Q{qubit_idx} at {self.data_file_address}")
+            print(f"Warning: Measurement calibration not found for Q{qubit_idx} at {self.meas_cal_dir}")
             return None, None
 
     def inference(self,
