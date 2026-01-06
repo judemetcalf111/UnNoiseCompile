@@ -18,7 +18,7 @@ import numpy.linalg as nl
 # For optimization
 from cvxopt import matrix, solvers
 
-import splitmeasfilter
+from src import splitmeasfilter
 import importlib
 importlib.reload(splitmeasfilter)
 from splitmeasfilter import *
@@ -662,11 +662,12 @@ class SplitGateFilter:
                  interested_qubits,
                  gate_num,
                  gate_type,
-                 work_dir='./',
+                 home_dir='./',
                  meas_cal_dir=None,
                  data_file_address='./data/'):
-        self.work_dir = work_dir
-        self.meas_cal_dir = meas_cal_dir if meas_cal_dir else work_dir
+        self.home_dir = home_dir
+        os.chdir(home_dir)
+        self.meas_cal_dir = meas_cal_dir if meas_cal_dir else home_dir
         self.data_file_address = data_file_address
         self.interested_qubits = interested_qubits
         self.gate_type = gate_type
@@ -839,7 +840,7 @@ class SplitGateFilter:
             self.post['Qubit' + str(q)] = post_lambdas
             
             # Save to CSV (Compatible with existing format)
-            filename = f"{self.data_file_address}Gate_Post_Qubit{i}.csv"
+            filename = f"{self.data_file_address}Gate_Post_Qubit{q}.csv"
             np.savetxt(filename, post_lambdas, delimiter=',')
             print(f"-> Saved {len(post_lambdas)} posterior samples to {filename}")
 
@@ -864,7 +865,7 @@ class SplitGateFilter:
                 I = np.sum(r_int * pdf_vals * delta_x)
 
                 print('Accepted Number N: %d, fraction %.3f' %
-                    (post_lambdas.shape[0], post_lambdas.shape[0] / M))
+                    (post_lambdas.shape[0], post_lambdas.shape[0] / nPrior))
                 print('I(pi^post_Lambda) = %.5g' % I)
                 
                 # Assuming closest_average and closest_mode are defined externally
@@ -877,7 +878,7 @@ class SplitGateFilter:
                     (ss.entropy(d_ker(xs), post_ker(xs))))
 
 
-                output_filename = f"{self.work_dir}Gate_Post_Qubit{q}.csv"
+                output_filename = f"{self.data_file_address}Gate_Post_Qubit{q}.csv"
                 np.savetxt(output_filename, post_lambdas, delimiter=",")
 
                 # Defining matplotlib width and height here as in the preamble for clarity
@@ -890,7 +891,7 @@ class SplitGateFilter:
                 plt.ylabel('Density')
                 plt.legend()
                 plt.tight_layout()
-                plt.savefig(self.work_dir + 'QoI-Qubit%g.pdf' % q)
+                plt.savefig(self.data_file_address + 'QoI-Qubit%g.pdf' % q)
                 plt.show()
                 
                 plt.figure(figsize=(width, height), dpi=100, facecolor='white')
@@ -903,7 +904,7 @@ class SplitGateFilter:
                 plt.xlabel(r'$\epsilon_g$')
                 plt.ylabel('Density')
                 plt.tight_layout()
-                plt.savefig(self.work_dir + 'Eps-Qubit%g.pdf' % q)
+                plt.savefig(self.data_file_address + 'Eps-Qubit%g.pdf' % q)
                 plt.show()
 
         # Finalize stats
