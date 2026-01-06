@@ -84,147 +84,6 @@ def closest_average(post_lambdas):
 
 
 ######################## For Parameter Characterzation ########################
-def gate_circ(nGates, gate_type, interested_qubit, itr, backend):
-    """
-      Generate circuits for gate error experiment
-
-    Parameters
-    ----------
-    nGates : int
-        number of gates.
-    gate_type : String
-        Chosen between "X", "Y", and "Z".
-    interested_qubit : int
-        on which qubit that those gates apply on.
-    itr : int
-        number of iteration to submit on the same qubit 
-        with defacult 8192 shots. (So in total runs itr*8192 times)
-
-    Returns
-    -------
-    None.
-
-    """
-    circ = QuantumCircuit(1, 1)
-    for _ in range(nGates):
-        if gate_type == 'X':
-            circ.x(0)
-        elif gate_type == 'Y':
-            circ.y(0)
-        elif gate_type == 'Z':
-            circ.z(0)
-        else:
-            raise Exception('Choose gate_type from X, Y, Z')
-        # Barriers prevent compiler optimization (crucial for noise characterization)
-        circ.barrier(0)
-    circ.measure([0], [0])
-
-    circ_trans = transpile(circ, backend, initial_layout=[interested_qubit])
-    print('Circ depth is ', circ_trans.depth())
-    
-    circs = []
-    for i in range(itr):
-        new_circ = circ_trans.copy()
-        new_circ.name = 'itr' + str(i)
-        circs.append(new_circ)
-    return circs
-
-
-def Gateexp(nGates,
-            gate_type,
-            interested_qubit,
-            itr,
-            backend,
-            file_address='',
-            job_id=''):
-    """
-      Function for collect data for gate error experiment
-
-    Parameters
-    ----------
-    nGates : int
-        number of gates.
-    gate_type : String
-        Chosen between "X", "Y", and "Z".
-    interested_qubit : int
-        on which qubit that those gates apply on.
-    itr : int
-        number of iteration to submit on the same qubit 
-        with defacult 8192 shots. (So in total runs itr*8192 times)
-    backend: Robust backend object
-        backend primarily supports Amazon Braket, before trying to call
-        `retrive_job` from qiskit-aer. Functional as of Qiskit 2.2.3.
-    file_address: string, optional
-        The relative file address to save data file. 
-        Ends with '/' if not empty
-        The default is ''.
-    job_id: string
-        If the job has been run before, put job id here;
-        otherwise a new job will be created and submiited to selected backend
-
-    Returns
-    -------
-    None.
-
-    """
-
-    circs = gate_circ(nGates, gate_type, interested_qubit, itr, backend)
-    
-    if job_id:
-            try:
-                # Attempt 1: Retrieve via provider (Common for Amazon Braket / IBM)
-                if hasattr(backend, 'provider') and backend.provider:
-                    job_exp = backend.provider.retrieve_job(job_id)
-                
-                # Attempt 2: Retrieve directly from backend (Legacy support)
-                elif hasattr(backend, 'retrieve_job'):
-                    job_exp = backend.retrieve_job(job_id)
-                
-                # Attempt 3: If using Qiskit Runtime Service 
-                elif hasattr(backend, 'service'):
-                    job_exp = backend.service.job(job_id)
-                    
-                else:
-                    raise NotImplementedError("This backend does not support direct job retrieval.")
-                
-                print("Successfully retrieved Job ID:", job_exp.job_id())
-
-            except Exception as e:
-                print(f"\n[Error] Could not retrieve Job ID {job_id}")
-                print(f"Reason: {str(e)}")
-                print("Note: Qiskit Aer (Simulators) cannot retrieve jobs from previous sessions.")
-                return # Exit to avoid crashing later when trying to access results
-    else:
-        # Run new job if no ID provided
-        # Optimization_level=0 is crucial to prevent removing the calibration gates
-        try:
-            # Handle shots depending on backend signature
-            job_exp = backend.run(circs, shots=8192, memory=True)
-        except TypeError:
-            # Fallback if backend doesn't accept 'memory' kwarg (some simulators)
-            job_exp = backend.run(circs, shots=8192)
-            
-        print("New Job submitted. Job ID:", job_exp.job_id())
-
-    # Record bit string
-    try:
-        exp_results = job_exp.result()
-        readout = np.array([])
-        for i in range(itr):
-            # Use integer index instead of name to ensure compatibility across providers
-            readout = np.append(readout, exp_results.get_memory(i))
-
-        # Save to file
-        filename = f'Readout_{nGates}{gate_type}Q{interested_qubit}.csv'
-        full_path = file_address + filename
-        
-        with open(full_path, mode='w') as sgr:
-            read_writer = csv.writer(sgr, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-            read_writer.writerow(readout)
-        print(f"Data saved to {full_path}")
-        
-    except Exception as e:
-        print(f"Failed to process/save results: {e}")
 
 # used to call QoI
 def QoI_gate(prior_lambdas: np.ndarray, gate_type, gate_num):
@@ -364,72 +223,6 @@ def read_data(interested_qubit, gate_type, gate_num, file_address=''):
 
     return cali01
 
-#     # File name change from Post_Qubit{} to Gate_Post_Qubit{}
-# def read_post(ideal_p0, itr,
-#               shots,
-#               interested_qubits,
-#               gate_type,
-#               gate_num,
-#               file_address='', interested_qubit=0):
-#     """
-#         Read posteror from files
-#         See output_gate() for explaintion for arguments and returns.
-#     """
-#     post = {}
-#     for q in interested_qubits:
-#         data = read_data(q, gate_type, gate_num, file_address=file_address)
-#         d = getData0(data, int(itr * shots / 1024), q)
-#         post_lambdas = pd.read_csv(file_address +
-#                                    'Gtae_Post_Qubit{}.csv'.format(q),
-#                                    header=None).to_numpy()
-#         post['Qubit' + str(q)] = post_lambdas
-
-#         # information part
-#         xs = np.linspace(0, 1, 1000)
-#         xsd = np.linspace(0.2, 0.8, 1000)
-#         d_ker = ss.gaussian_kde(d)
-#         print('Posterior Lambda Mean', closest_average(post_lambdas))
-#         print('Posterior Lambda Mode', closest_mode(post_lambdas))
-#         print('0 to 1: KL-Div(pi_D^Q(post),pi_D^obs) = %6g' %
-#               (ss.entropy(post_ker(xs), d_ker(xs))))
-#         print('0 to 1: KL-Div(pi_D^obs,pi_D^Q(post)) = %6g' %
-#               (ss.entropy(d_ker(xs), post_ker(xs))))
-        
-#         # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
-#         plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-#         post_qs = QoI_gate(post_lambdas, ideal_p0, gate_num)
-#         post_ker = ss.gaussian_kde(post_qs)
-#         plt.plot(xsd,
-#                  d_ker(xsd),
-#                  color='Red',
-#                  linestyle='dashed',
-#                  linewidth=3,
-#                  label='Observed QoI')
-#         plt.plot(xsd, post_ker(xsd), color='Blue', label='QoI by Posterior')
-#         plt.xlabel('Pr(Meas. 0)')
-#         plt.ylabel('Density')
-#         plt.legend()
-#         plt.tight_layout()
-#         plt.savefig(file_address + 'QoI-Qubit%g.pdf' % interested_qubit)
-#         plt.show()
-        
-#         # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
-#         plt.figure(figsize=(width,height), dpi=120, facecolor='white')
-#         eps_ker = ss.gaussian_kde(post_lambdas[:, 2])
-#         eps_line = np.linspace(
-#             np.min(post_lambdas, axis=0)[2],
-#             np.max(post_lambdas, axis=0)[2], 1000)
-#         plt.plot(eps_line, eps_ker(eps_line), color='Blue')
-#         plt.ticklabel_format(axis="x", style="sci", scilimits=(-5, 1))
-#         plt.xlabel(r'$\epsilon_g$')
-#         plt.ylabel('Density')
-#         plt.tight_layout()
-#         plt.savefig(file_address + 'Eps-Qubit%g.pdf' % interested_qubit)
-#         plt.show()
-
-#     return post
-
-
 def plotComparsion(data, post_lambdas, q, file_address=''):
     """
         Plot comparision between BJW bayesian and standard bayesian.
@@ -468,39 +261,6 @@ def plotComparsion(data, post_lambdas, q, file_address=''):
 
 
 #################### For Error Filtering #########################
-def sxpower(s, x):
-    total = 0
-    length = len(s)
-    for i in range(length):
-        si = int(s[i])
-        xi = int(x[i])
-        total += si * xi
-    return total
-
-
-def count1(s):
-    count = 0
-    for i in range(len(s)):
-        if s[i] == '1':
-            count += 1
-    return count
-
-
-def gate_matrix(length, eps, m):
-    """
-        Generate matrix for denosing gate error
-
-    """
-    size = 2**length
-    mat = np.empty([size, size], dtype=np.float64)
-    for row in range(size):
-        for col in range(size):
-            x = ("{0:0" + str(length) + "b}").format(row)
-            s = ("{0:0" + str(length) + "b}").format(col)
-            power = sxpower(s, x)
-            mat[row, col] = ((-1)**power) * ((1 - eps)**(count1(s) * m))
-    return mat
-
 
 def find_least_norm_gate(ptilde):
     """
@@ -628,8 +388,6 @@ def gate_denoise_vectorised(m, p0s, prior_lambdas):
 ########################## Class for Error Filtering ########################
 class SplitGateFilter:
     """ Gate and Measurement error filter.
-        WARNING: After 2021 Summer, 0.5*eps_in_code = eps_in_paper
-        TODO: Change Code!!!!
     Attributes:
         interested_qubits: array,
           qubit indices that experiments are applied on.
