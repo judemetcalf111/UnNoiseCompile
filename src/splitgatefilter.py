@@ -5,9 +5,6 @@ Created on Wed Dec 31 15:13:15 2025
 @author: Jude L. Metcalf
 """
 
-# Qiskit
-from qiskit import QuantumCircuit, transpile
-
 # Numerical/Stats pack
 import csv
 import pandas as pd
@@ -22,11 +19,14 @@ import src.splitmeasfilter
 import importlib
 importlib.reload(src.splitmeasfilter)
 from src.splitmeasfilter import *
-# For plot
+
+# For plotting
 import matplotlib.pyplot as plt
 from matplotlib.pyplot import figure
 width = 6.72 # plot width
 height = 4.15 # plot height
+
+######################### Numerical Helper Functions #########################
 
 def closest_mode(post_lambdas):
     """Find the tuple of model parameters that closed to 
@@ -335,7 +335,7 @@ class SplitGateFilter:
             file_0 = f"{self.meas_cal_dir}State0_Post_Qubit{qubit_idx}.csv"
             file_1 = f"{self.meas_cal_dir}State1_Post_Qubit{qubit_idx}.csv"
             
-            # Load raw samples (Use pandas as in splitmeasfilter for robustness)
+            # Load raw samples (Using pandas as in splitmeasfilter for robustness)
             # These files contain 1D arrays of "Success Rates"
             post_0 = pd.read_csv(file_0, header=None).values.flatten()
             post_1 = pd.read_csv(file_1, header=None).values.flatten()
@@ -388,11 +388,11 @@ class SplitGateFilter:
             how many shots you want to estimate one QoI (prob. of meas. 0).
             Used to control number of data points and accuracy.
             The default is 1024.
-        write_data_for_SB : boolean, optional
-            If write data to execute standard Bayesian.
-            This parameter is only for the purpose of writing paper.
-            Just IGNORE IT.
-            The default is False.
+        use_informed_priors : bool, optional
+            Whether to use informed priors from measurement calibration.
+            The default is True.
+        plotting : bool, optional
+            Whether to plot the posterior results. The default is True.
 
         Returns
         -------
