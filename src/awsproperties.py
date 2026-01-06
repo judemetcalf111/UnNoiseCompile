@@ -1,5 +1,4 @@
 # general imports
-import json
 import numpy as np
 
 from braket.aws import AwsDevice
@@ -29,6 +28,8 @@ def get_braket_calibration_dict(device_arn, n_qubits=None):
     else:
         if one_props_len != n_qubits:
             raise ValueError(f"Warning: Provided n_qubits={n_qubits} does not match device oneQubitProperties length={one_props_len}. Using device length.")
+        else:
+            n_qubits = one_props_len
             
     properties = {}
 
@@ -37,6 +38,9 @@ def get_braket_calibration_dict(device_arn, n_qubits=None):
         q_two_props = {k: v["twoQubitGateFidelity"][0]["fidelity"]
                         for k, v in two_props.items() if str(q) in k.split("-")}
 
+        one_gate_fidelity = q_one_prop[0]["fidelity"]
         pm1p0 = q_one_prop[1]["fidelity"]
         pm0p1 = q_one_prop[2]["fidelity"]
-        properties[str(q)] = {"pm1p0": pm1p0, "pm0p1": pm0p1, "twoQubitProperties": q_two_props}
+        properties[str(q)] = {"pm1p0": pm1p0, "pm0p1": pm0p1, "oneQubitFidelity": one_gate_fidelity, "twoQubitProperties": q_two_props}
+
+    return properties
