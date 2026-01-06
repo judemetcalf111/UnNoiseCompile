@@ -4,374 +4,28 @@ Created on Wed Dec 31 13:18:38 2025
 
 @author: Jude L. Metcalf
 """
-# Qiskit
 import os
-from qiskit import QuantumCircuit, transpile
-from braket.aws import AwsDevice
-
-# Numerical/Stats pack
 import csv
 import pandas as pd
 import numpy as np
 import scipy.stats as ss
 import numpy.linalg as nl
-from math import pi
-# For optimization
 from scipy.optimize import minimize
-# For plotting
 import matplotlib.pyplot as plt
 from aquarel import load_theme
 
-theme = load_theme("arctic_light")
-theme.apply()
-theme.apply_transforms()
-width = 6.72 # plot width
-height = 4.15 # plot height
+# Optional: Apply theme if available
+try:
+    theme = load_theme("arctic_light")
+    theme.apply()
+    theme.apply_transforms()
+except:
+    pass
 
+width = 6.72 
+height = 4.15 
 
-
-# def get_braket_calibration_dict(device_arn, n_qubits=None):
-#     """
-#     Returns the params list in the exact format required by MeasFilter.
-#     """
-#     device = AwsDevice(device_arn)
-#     properties = device.properties
-    
-#     # Try to find qubit count if not provided
-#     if n_qubits is None:
-#         try:
-#             n_qubits = properties.paradigm.qubitCount
-#         except:
-#             n_qubits = 5 # Manual override if needed
-
-#     formatted_params = []
-
-#     for q in range(n_qubits):
-#         # 1. Default conservative error (5% error)
-#         p_meas0_prep1 = 0.05 
-#         p_meas1_prep0 = 0.05
-        
-#         # 2. Try to extract real Fidelity from Braket Properties
-#         # This structure depends on the provider (Rigetti, OQC, etc.)
-#         try:
-#             # Example for Rigetti (Standardized in Braket properties)
-#             # We look for "fRO" (Readout Fidelity)
-#             provider_specs = properties.provider.specs
-#             qubit_specs = provider_specs.get(f"{q}Q", {}).get(f"{q}", {})
-#             fRO = qubit_specs.get('fRO', None)
-            
-#             if fRO:
-#                 error = 1.0 - fRO
-#                 # Assume symmetric error if specific p(0|1) isn't detailed
-#                 p_meas0_prep1 = error
-#                 p_meas1_prep0 = error
-#         except:
-#             # If extraction fails, we stick to the 0.05 default
-#             pass
-
-#         # 3. Create the dictionary for this qubit
-#         qubit_cal = {
-#             'qubit': q,
-#             'pm0p1': p_meas0_prep1, # PROB MEASURING 0 GIVEN PREP 1
-#             'pm1p0': p_meas1_prep0, # PROB MEASURING 1 GIVEN PREP 0
-#             # Extra fields required by the code logic, even if unused
-#             'itr': 32,
-#             'shots': 8192
-#         }
-        
-#         formatted_params.append(qubit_cal)
-
-#     return np.array(formatted_params)
-
-
-# def param_record(backend, itr=32, shots=8192, if_write=True, file_address=''):
-#     """Write backend property into an array of dict 
-#        and save as csv if permissible.
-
-#     Args:
-#       backend: Backend
-#         A Qiskit backend instance.
-#       itr: int
-#         number of iterations of job submission.
-#       shots: int
-#         number of shots per each job submission.
-#       if_write: boolean
-#         True if save the properties as a csv file.
-#       file_address: string
-#         The relative file address to save backend properties. 
-#         Ends with '/' if not empty
-#         The default is ''.
-
-#     Returns: numpy array
-#       An array of dicts. Each dict records all characterization of one qubit.
-#     """
-#     allParam = np.array([])
-    
-#     try:
-#         # Check if backend supports properties interface
-#         if not hasattr(backend, 'properties') or backend.properties() is None:
-#             raise Exception("Backend properties not available.")
-
-#         prop_dict = backend.properties().to_dict()
-#         nQubits = len(prop_dict['qubits'])
-        
-#         # Helper to safely extract values from property lists
-#         def get_val(props, name):
-#             for item in props:
-#                 if item.get('name') == name:
-#                     return item.get('value')
-#             return 0.0 # Default if not found
-
-#         target_qubits = range(nQubits)
-        
-#         for target_qubit in target_qubits:
-#             qubit_props = prop_dict['qubits'][target_qubit]
-            
-#             # Basic params
-#             params = {
-#                 'qubit': target_qubit,
-#                 'update_date': prop_dict.get('last_update_date', 'N/A'),
-#                 'T1': get_val(qubit_props, 'T1'),
-#                 'T2': get_val(qubit_props, 'T2'),
-#                 'freq': get_val(qubit_props, 'frequency'),
-#                 'readout_err': get_val(qubit_props, 'readout_error'),
-#                 'pm0p1': get_val(qubit_props, 'prob_meas0_prep1'),
-#                 'pm1p0': get_val(qubit_props, 'prob_meas1_prep0'),
-#                 'itr': itr,
-#                 'shots': shots,
-#             }
-
-#             # Try to fetch gate errors if available in legacy format
-#             # Many non-IBM backends won't have this specific structure, so we wrap in try
-#             try:
-#                 gates = prop_dict.get('gates', [])
-#                 # Simplified extraction logic or defaults
-#                 # This part is highly specific to IBM's old map; defaulting if fails
-#                 params['id_error'] = 0.001
-#                 params['u3_error'] = 0.001 
-#                 # (Real extraction logic omitted for brevity/compatibility)
-#             except:
-#                 pass
-
-#             allParam = np.append(allParam, params)
-
-#         if if_write:
-#             with open(file_address + 'Params.csv', mode='w', newline='') as sgm:
-#                 param_writer = csv.writer(sgm,
-#                                           delimiter=',',
-#                                           quotechar='"',
-#                                           quoting=csv.QUOTE_MINIMAL)
-#                 for pa in allParam:
-#                     for key, val in pa.items():
-#                         param_writer.writerow([key, val])
-#                     param_writer.writerow(['End'])
-
-#     except Exception as e:
-#         print(f"Note: Backend parameters could not be recorded ({str(e)}). Using defaults for inference.")
-#         # Return empty; inference engine handles empty params by setting defaults
-#         return np.array([])
-
-#     return allParam
-
-
-# def meas_circ(nQubits, backend=None, itr=32):
-#     """
-#     Generates 2 * itr circuits compatible with Qiskit 2.x and Braket.
-#     - First half prepares |0>
-#     - Second half prepares |1>
-
-#     Args:
-#         nQubits: int
-#             number of qubits.
-#         backend: Backend
-#             A Qiskit backend instance. Used for transpilation.
-#         itr: int
-#             number of iterations of each state preparation.
-
-#     Returns: list of form [{QuantumCircuit preparing |0>}, {QuantumCircuit preparing |1>}]
-#     """
-#     circs = []
-    
-#     # Create |0> circuits (Identity)
-#     # Note: Explicit 'id' gates often optimized away, so we use barriers 
-#     # or simple measurements to define the state.
-#     c0 = QuantumCircuit(nQubits, nQubits)
-
-#     # No gates needed for |0>, just measure. 
-#     # We add a barrier to prevent transpiler from merging if we added ops later.
-#     c0.barrier() 
-#     c0.measure(range(nQubits), range(nQubits))
-    
-#     # Create |1> circuits (X gate)
-#     c1 = QuantumCircuit(nQubits, nQubits)
-#     c1.x(range(nQubits)) # Broadcast X to all qubits
-#     c1.barrier()
-#     c1.measure(range(nQubits), range(nQubits))
-
-#     # Transpile if backend provided (Optional but recommended for ISA)
-#     if backend:
-#         # In Qiskit 2.x, it's best to transpile once before copying
-#         c0 = transpile(c0, backend)
-#         c1 = transpile(c1, backend)
-
-#     # Create the batch
-#     # We use metadata or naming to track them
-#     ## Perhaps change to one request with many shots?
-#     for i in range(itr):
-#         # Create copies
-#         c0_copy = c0.copy()
-#         c0_copy.name = f"cal_0_itr{i}"
-#         circs.append(c0_copy)
-        
-#     for i in range(itr):
-#         c1_copy = c1.copy()
-#         c1_copy.name = f"cal_1_itr{i}"
-#         circs.append(c1_copy)
-        
-#     return circs
-
-# def collect_filter_data(backend,
-#                         itr=32,
-#                         shots=8192,
-#                         if_write=True,
-#                         file_address='',
-#                         job_id=''):
-#     """
-#     Collects measurement data compatible with Amazon Braket Qiskit Provider.
-#     """
-#     # Determine qubit count 
-#     try:
-#         nQubits = backend.num_qubits
-#     except:
-#         nQubits = 5 # Fallback
-#         raise Exception("Number of Qubits not found!!!!")
-
-#     readout_m0 = np.array([])
-    
-#     # Generate the circuits (One circuit repeated 'itr' times with unique names)
-#     circs = meas_circ(nQubits, backend, itr=itr)
-
-#     # Job Execution or Retrieval (Sim or Real)
-#     if job_id:
-#         print(f"Retrieving existing Braket Job ID: {job_id}")
-#         try:
-#             # Braket Provider usually allows retrieving via the backend or service
-#             job_m0 = backend.retrieve_job(job_id)
-#         except Exception as e:
-#             print(f"Failed to retrieve job: {e}")
-#             return np.array([])
-#     else:
-#         print(f"Submitting new batch job with {itr} circuits to {backend.name}...")
-#         try:
-#             # Executing all circuits in one batch
-#             # 'memory=True' to get the bitstrings required for this inference
-#             job_m0 = backend.run(circs, shots=shots, memory=True)
-#             print(f"Job submitted. ID: {job_m0.job_id()}")
-            
-#             # For later, as of 03/01: Explicit wait loop if the provider doesn't block automatically
-#             # while not job_m0.in_final_state():
-#             #     print("Status:", job_m0.status())
-#             #     time.sleep(5)
-                
-#         except Exception as e:
-#             print(f"Job submission failed: {e}")
-#             return np.array([])
-
-#     # Extract Results
-# # try:
-#     # This blocks until the job is done
-#     m0_res = job_m0.result()
-    
-#     print("Job complete. extracting memory...")
-
-#     # Loop through the experiments (one for each circuit in the batch)
-#     for i in range(itr):
-#         # get_memory(i) retrieves the list of bitstrings for the i-th circuit
-#         # e.g., ['000', '001', '000', ...]
-#         memory_data = m0_res.get_memory(i)
-#         readout_m0 = np.append(readout_m0, memory_data)
-
-#     # Save to CSV
-#     if if_write:
-#         filename = file_address + 'Filter_data.csv'
-#         print(f"Saving data to {filename}...")
-#         # Using 'w' mode with standard csv writer
-#         with open(filename, mode='w', newline='') as sgr:
-#             read_writer = csv.writer(sgr, quoting=csv.QUOTE_MINIMAL)
-#             read_writer.writerow(readout_m0)
-                
-# # except Exception as e:
-# #     print(f"Error processing results: {e}")
-# #     # If accessing memory fails, print available keys to help debug
-# #     try:
-# #         print("Result keys available:", m0_res.get_counts())
-# #     except:
-# #         pass
-
-#     return readout_m0
-
-
-# def read_params(file_address=''):
-#     """Read out backend properties from csv file generated by param_record().
-
-#     Args:
-#       file_address: string
-#         The relative file address to read backend properties. 
-#         Ends with '/' if not empty
-#         The default is ''.
-
-#     Returns: numpy array
-#       An array of dicts. Each dict records all characterization of one qubit.
-#     """
-#     textKeys = ['name', 'update_date', 'qubit']
-#     intKeys = ['itr', 'shots']
-#     # Read Parameters
-#     with open(file_address + 'Params.csv', mode='r') as sgm:
-#         reader = csv.reader(sgm)
-#         params = []
-#         singleQubit = {}
-#         first = True
-#         for row in reader:
-#             if row[0] == 'End':
-#                 params.append(singleQubit)
-#                 singleQubit = {}
-#             else:
-#                 singleQubit[row[0]] = row[1]
-
-#     # Convert to numpy array
-#     params = np.array(params)
-
-#     # Convert corresponding terms into floats or ints
-#     for qubit in params:
-#         for key in qubit.keys():
-#             if key not in textKeys:
-#                 qubit[key] = float(qubit[key])
-#             if key in intKeys:
-#                 qubit[key] = int(qubit[key])
-
-#     return params
-
-
-# def read_filter_data(file_address=''):
-#     """Read out bit string data from csv file generated by collect_filter_data().
-
-#     Args:
-#       file_address: string
-#         The relative file address to read data for filter generation. 
-#         Ends with '/' if not empty
-#         The default is ''.
-
-#     Returns: numpy array
-#       An array of bit strings.
-#     """
-#     # Should be able to use np.genfromtxt
-#     cali01 = np.genfromtxt(file_address + 'Filter_data.csv', delimiter=',',dtype=str)
-#     if len(cali01) < 2:
-#         with open(file_address + 'Filter_data.csv', mode='r') as measfile:
-#             reader = csv.reader(measfile)
-#             cali01 = np.asarray([row for row in reader][0])
-#     return cali01
-
+# --- Helper Functions ---
 
 def tnorm01(center, sd, size=1):
     """ Generate random numbers for truncated normal with range [0,1]
@@ -386,12 +40,12 @@ def tnorm01(center, sd, size=1):
 
     Returns: array
        an array of random numbers
-    """
+    """ 
     upper = 1
     lower = 0
+    if sd == 0: return np.full(size, center)
     a, b = (lower - center) / sd, (upper - center) / sd
     return ss.truncnorm.rvs(a, b, size=size) * sd + center
-
 
 def find_mode(data):
     """Find the mode through Gaussian KDE.
@@ -403,10 +57,15 @@ def find_mode(data):
     Returns: float
       the mode.
     """
+    if len(data) < 2: return np.mean(data)
     kde = ss.gaussian_kde(data)
-    line = np.linspace(min(data), max(data), 10000)
+    line = np.linspace(min(data), max(data), 1000)
     return line[np.argmax(kde(line))]
 
+def safe_mean(data) -> float:
+    """ Safely compute the mean, returning 0.0 if empty to avoid crashes. """
+    if len(data) == 0: return 0.0
+    return float(np.mean(data))
 
 def dictToVec(nQubits, counts):
     """ Transfer counts to vec
@@ -427,29 +86,10 @@ def dictToVec(nQubits, counts):
     vec = np.zeros(2**nQubits)
     form = "{0:0" + str(nQubits) + "b}"
     for i in range(2**nQubits):
-        key = form.format(i) # consider key = format(i,'0{}b'.format(nQubits))
-                             # and delete variable form
-        if key in counts.keys():
+        key = form.format(i) 
+        if key in counts:
             vec[i] = int(counts[key])
-        else:
-            vec[i] = 0
     return vec
-
-
-def dictToVec_inv(nQubits, counts):
-    """ 
-      Same as dictToVec() but key uses big-endian convention
-    """
-    vec = np.zeros(2**nQubits)
-    form = "{0:0" + str(nQubits) + "b}"
-    for i in range(2**nQubits):
-        key = form.format(i)[::-1]
-        if key in counts.keys():
-            vec[i] = int(counts[key])
-        else:
-            vec[i] = 0
-    return vec
-
 
 def vecToDict(nQubits, shots, vec):
     """ Transfer probability vector to dict in the form 
@@ -480,68 +120,32 @@ def vecToDict(nQubits, shots, vec):
         counts[key] = int(vec[i] * shots)
     return counts
 
-def safe_mean(data) -> float:
+def dict_filter(data_dict: dict, percent: float = 99.0) -> dict:
     """
-    Safely compute the mean of a parameter, raising a type error if needed
+    Filters a dictionary to retain entries that make up the top x% of total counts, the default set to 99%.
+
+    Args:
+        data_dict (dict): The input dictionary with counts.
+        percent (float): The percentage (0-100) threshold to retain (default is 99).
+
+    Returns:
+        dict: A new dictionary containing only the top 99% of entries.
     """
-    if type(data) == list or type(data) == np.ndarray:
-        mean = float(np.mean(data))
-    else:
-        raise Exception(f'Input {data} is not of type "list" or "numpy.ndarray", instead it is of type {type(data)}')
+    total_sum = sum(data_dict.values())
+    if total_sum == 0: return {}
+    sorted_items = sorted(data_dict.items(), key=lambda item: item[1], reverse=True)
+    filtered_dict = {}
+    cumulative_sum = 0
+    if percent > 1.0: percent /= 100.0
+    threshold = percent * total_sum
+    for key, value in sorted_items:
+        if cumulative_sum < threshold:
+            filtered_dict[key] = value
+            cumulative_sum += value
+        else:
+            break
+    return filtered_dict
 
-    return mean
-
-
-### Needed? What for?
-# def vecToDict_inv(nQubits, shots, vec):
-#     """ 
-#       Same as dictToVec() but key uses big-endian convention
-#     """
-#     counts = {}
-#     form = "{0:0" + str(nQubits) + "b}"
-#     for i in range(2**nQubits):
-#         key = form.format(i)[::-1]
-#         counts[key] = int(vec[i] * shots)
-#     return counts
-
-def dict_filter(data_dict: dict[str, int], percent: float | int = 99.0) -> dict[str, int]:
-        """
-        Filters a dictionary to retain entries that make up the top x% of total counts, the default set to 99%.
-
-        Args:
-            data_dict (dict): The input dictionary with counts.
-            percent (float): The percentage (0-100) threshold to retain (default is 99).
-
-        Returns:
-            dict: A new dictionary containing only the top 99% of entries.
-        """
-        total_sum = sum(data_dict.values())
-        if total_sum == 0:
-            return {}
-
-        # Sort descending
-        sorted_items = sorted(data_dict.items(), key=lambda item: item[1], reverse=True)
-
-        filtered_dict = {}
-        cumulative_sum = 0
-        # Smart way to ensure the correct percentage scale (0.99 vs 99)
-        # Shouldn't have to think about it, but still!! Cool!!!
-        if percent > 1.0: 
-            percent = percent / 100.0
-        
-        threshold = percent * total_sum
-
-        for key, value in sorted_items:
-            if cumulative_sum < threshold:
-                filtered_dict[key] = value
-                cumulative_sum += value
-            else:
-                break
-                
-        return filtered_dict
-
-
-# Functions
 def getData0(data, num_group, interested_qubit):
     """ Get the probabilities of measuring 0 from binary readouts
         **Binary number follows little-endian convention**
@@ -562,182 +166,108 @@ def getData0(data, num_group, interested_qubit):
         Array of probabilities of measuring 0 for each group.
 
     """
-    # Ensure input is a numpy array of strings (bytes for performance)
-    data_arr = np.array(data, dtype='S')
+    # Force conversion to string list to handle numpy ints or bytes
+    data_list = [str(x).strip() for x in data]
     
-    # Check if data can be evenly divided
-    if data_arr.size % num_group != 0:
-        raise ValueError(f"Data size {data_arr.size} is not divisible by num_group {num_group}")
+    if len(data_list) == 0:
+        return np.array([])
 
-    # Since the input is little-endian (qubit 0 is at the end of the string),
-    # the index is: Length - 1 - interested_qubit.
+    # Determine index for interested qubit (Little Endian)
+    # If string is '00', Qubit 0 is at index 1 (end), Qubit 1 at index 0.
+    str_len = len(data_list[0])
+    target_idx = str_len - 1 - interested_qubit
     
-    # length of the strings 
-    str_len = data_arr.itemsize 
-    
-    # Calculate the target index in the string (Big-Endian representation in memory)
-    col_idx = str_len - 1 - interested_qubit
+    # Fallback if qubit index out of bounds
+    if target_idx < 0: target_idx = 0 
 
-    # replicate the 'try/except' fallback logic from the original code:
-    # If the qubit index is out of bounds (string too short), look at the 
-    # 0-th qubit (which corresponds to the last character in the string).
-    if col_idx < 0:
-        col_idx = str_len - 1
+    is_zero_counts = []
+    
+    # Parse Bits
+    for s in data_list:
+        try:
+            bit = s[target_idx]
+        except IndexError:
+            bit = '0' # Fallback
+            
+        # Check for '0' char. 
+        if bit == '0':
+            is_zero_counts.append(1.0)
+        else:
+            is_zero_counts.append(0.0)
 
-    # Convert array of strings into a 2D matrix of single characters
-    # e.g., ['01', '10'] becomes [['0', '1'], ['1', '0']]
-    # reshape into (total_samples, string_length)
-    chars = data_arr.view('S1').reshape(data_arr.size, -1)
+    # Reshape and Average
+    total_len = len(is_zero_counts)
+    if num_group > total_len or num_group <= 0:
+        # Prevent zero division or impossible reshape
+        return np.array(is_zero_counts)
+
+    trunc_len = total_len - (total_len % num_group)
     
-    # extract only the column corresponding to the interested qubit
-    qubit_measurements = chars[:, col_idx]
+    if trunc_len == 0:
+        return np.array([])
+        
+    arr = np.array(is_zero_counts[:trunc_len])
+    grouped = arr.reshape(num_group, -1)
     
-    # Reshape to (num_group, samples_per_group)
-    grouped_measurements = qubit_measurements.reshape(num_group, -1)
-    
-    # Check where measurements are '0' (results in a boolean matrix)
-    # Taking the mean of booleans converts True to 1 and False to 0, giving the probability.
-    prob0 = (grouped_measurements == b'0').mean(axis=1)
+    # Calculate mean (probability of being 0)
+    prob0 = grouped.mean(axis=1)
     
     return prob0
 
-# def QoI(prior_lambdas, prep_state='0'):
-#     """
-#     Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
-
-#     Parameters
-#     ----------
-#     prior_lambdas : numpy array
-#         each subarray is an individual prior lambda.
-
-#     prep_state : string, optional
-#         The state prepared to, 
-
-#     Returns
-#     -------
-#     qs : numpy array
-#         QoI's. Here they are the probability of measuring 0 with each given
-#         prior lambdas in prior_lambdas.
-
-#     """
-#     num_samples = prior_lambdas.shape[0]
-
-#     # Define Ideal Vector based on what we prepared
-#     if prep_state == '0':
-#         # [Prob(0), Prob(1)] -> [100%, 0%]
-#         M_ideal = np.array([[1.0, 0.0]]*num_samples) 
-#     elif prep_state == '1':
-#         # [Prob(0), Prob(1)] -> [0%, 100%]
-#         M_ideal = np.array([[0.0, 1.0]]*num_samples) 
-#     else: # Default to '+'
-#         print('Default to |+>, set prep_state = "0" or "1" for these preparations.')
-#         M_ideal = np.array([[0.5, 0.5]]*num_samples) 
-
-#     # Vectorised Forward noising place of previous errMitMat()
-
-#     pm0p0 = prior_lambdas[:, 0]
-#     pm1p1 = prior_lambdas[:, 1]
-
-#     A_batch = np.zeros((num_samples, 2, 2))
-
-#     # Row 0
-#     A_batch[:, 0, 0] = pm0p0
-#     A_batch[:, 0, 1] = 1 - pm1p1
-    
-#     # Row 1
-#     A_batch[:, 1, 0] = 1 - pm0p0
-#     A_batch[:, 1, 1] = pm1p1
-
-#     M_observed = A_batch @ M_ideal
-    
-#     # The result is the Probability of Measuring 0 (First component)
-#     qs = M_observed[:, 0, 0]
-
-#     return qs
-
-
 def dq(x, qs_ker, d_ker):
-    # if np.abs(qs_ker(x)[0])  > 0:
-    #     if d_ker(x) == 0: # A lot of 0s in both sides may cause opt algorithm terminates
-    #         # return np.abs(0.5-x)
-    #         return np.infty
-    #     else :
-    #         return - d_ker(x)[0] / qs_ker(x)[0] 
-    # else:
-    #     return np.infty
-    if np.abs(qs_ker(x)[0])  > 1e-6 and np.abs(d_ker(x)[0])  > 1e-6:
+    if np.abs(qs_ker(x)[0]) > 1e-6 and np.abs(d_ker(x)[0]) > 1e-6:
         return - d_ker(x)[0] / qs_ker(x)[0] 
     else:
         return np.inf
 
-
-
-
 def findM(qs_ker, d_ker, prep_state):
-    """
-    The function used to find the M that maximises the d/q ratio
-    """
-    # Scan the space to find where the prior actually exists
+    """ Find M that maximises the d/q ratio """
     if prep_state == '0':
         x_scan = np.linspace(0.95, 1, 1000)
     elif prep_state == '1':
         x_scan = np.linspace(0, 0.05, 1000)
     else:
         x_scan = np.linspace(0, 1, 1000)
-    prior_density = qs_ker(x_scan)
     
-    # Define Effective Support: 
-    # Only consider regions where prior density is at least 1% of its peak.
+    prior_density = qs_ker(x_scan)
     threshold = 0.01 * np.max(prior_density)
     valid_indices = np.where(prior_density > threshold)[0]
     
     if len(valid_indices) > 1:
-        # Set bounds to the range where prior is significant
         lower_bound = x_scan[valid_indices[0]]
         upper_bound = x_scan[valid_indices[-1]]
         bds = (lower_bound, upper_bound)
     else:
-        # Fallback if density is flat or error
-        bds = (0.2, 0.8) 
+        bds = (0.0, 1.0) 
 
-    # Find a safe starting point (x0) inside the valid bounds
-    # We look for the minimum of y only within our valid indices
     ys = np.array([dq(x, qs_ker, d_ker) for x in x_scan])
-    valid_ys = ys[valid_indices]
-    valid_xs = x_scan[valid_indices]
-    x0 = valid_xs[np.argmin(valid_ys)]
-
-    # Run Optimizer with safe bounds
-    res = minimize(dq, (x0,), args=(qs_ker, d_ker), bounds=(bds,), method='L-BFGS-B')
-
-    # --- Plot --------------------------------------------------
-    plt.figure(figsize=(width,height), dpi=100, facecolor='white')
-    plt.plot(1 - x_scan, ys, c = 'crimson', lw = 2, label = '-Data/Prior')
-    plt.xlabel("Qubit Value")
-    plt.ylabel("Relative Rate (-Data/Prior)")
-    plt.title("-Data/Prior PDFs Minimised for Efficient Inference")
-    # -----------------------------------------------------------
     
+    # Safe argmin
+    if len(valid_indices) > 0:
+        valid_ys = ys[valid_indices]
+        valid_xs = x_scan[valid_indices]
+        x0 = valid_xs[np.argmin(valid_ys)]
+    else:
+        x0 = 0.5
+
+    # Run Optimizer
     try:
-        plt.axhline(res.fun[0], label = r'$\mu$ minimiser', c = 'purple')
-        plt.legend()
+        res = minimize(dq, (x0,), args=(qs_ker, d_ker), bounds=(bds,), method='L-BFGS-B')
+        
+        # Plotting (Optional - can comment out for speed)
+        plt.figure(figsize=(width,height), dpi=100)
+        plt.plot(1 - x_scan, ys, c='crimson', lw=2)
+        plt.title("-Data/Prior PDFs")
         plt.show()
-        return -res.fun[0], res.x[0]
-    except Exception:
-        plt.axhline(res.fun, label = r'$\mu$ minimiser', c = 'purple')
-        plt.legend()
-        plt.show()
-        return -res.fun, res.x
-    
+        
+        return -res.fun[0] if isinstance(res.fun, np.ndarray) else -res.fun, res.x[0] if isinstance(res.x, np.ndarray) else res.x
+    except:
+        return 1.0, x0 # Fallback
+
 def QoI_single(lambdas, prep_state='0'):
-    """
-    Optimized QoI that maps Success Rate (lambda) to Prob(Measuring 0).
-    """
     if prep_state == '0':
-        # If Prep 0, P(Meas 0) = Success Rate
         return lambdas 
     elif prep_state == '1':
-        # If Prep 1, P(Meas 0) = 1.0 - Success Rate
         return 1.0 - lambdas
     return lambdas
 
@@ -790,22 +320,20 @@ def output(d,
         a is the number of posterior and m is the number of model parameters
 
     """
-    # Algorithm 1 of https://doi.org/10.1137/16M1087229
     np.random.seed(seed)
+    
+    # Determine Prior Mean from Params
     if prep_state == '0':
-        # We are looking for Success Rate on 0 (1 - p(1|0))
         prior_mean = 1.0 - params[interested_qubit].get('pm1p0', 0.05)
     else:
-        # We are looking for Success Rate on 1 (1 - p(0|1))
         prior_mean = 1.0 - params[interested_qubit].get('pm0p1', 0.05)
 
-    # Sanity check constraints
-    if prior_mean > 1.0 or prior_mean < 0.7:
-        prior_mean = 0.95
+    if prior_mean > 1.0 or prior_mean < 0.7: prior_mean = 0.95
 
-    success_rates = tnorm01(prior_mean, prior_sd, size=M) # 1D single lambda array of size M
+    # Generate Priors (Success Rates)
+    success_rates = tnorm01(prior_mean, prior_sd, size=M)
 
-    # Map fidelity to the observable (Probability of Measuring 0)
+    # Map to Observable
     if prep_state == '0':
         prob_meas_0 = success_rates
     elif prep_state == '1':
@@ -813,63 +341,38 @@ def output(d,
     else:
         raise ValueError('prep_state must be "0" or "1".')
     
-    qs = QoI_single(success_rates, prep_state=prep_state) # Single lambda QoI, optimising to find e0 and e1 separately
+    qs = QoI_single(success_rates, prep_state=prep_state)
 
-    d_ker = ss.gaussian_kde(d)
-    qs_ker = ss.gaussian_kde(qs)
+    # KDE (Protected)
+    try:
+        d_ker = ss.gaussian_kde(d)
+        qs_ker = ss.gaussian_kde(qs)
+    except Exception as e:
+        print(f"   KDE Failed (Data likely singular): {e}")
+        # Fallback: Return original priors if we can't update them
+        return success_rates, success_rates
 
-    print(f'Given Lambda preparing {prep_state}): success rate = {prior_mean:.4f}')
+    print(f'Given Lambda |{prep_state}>: success rate = {prior_mean:.4f}')
 
-    # Find the max ratio r(Q(lambda)) over a single lambda
-
+    # Optimization
     max_r, max_q = findM(qs_ker, d_ker, prep_state)
 
-    # Print and Check
-    print('Final Accepted Posterior Lambdas')
-    print(r'$\mu$' + f': %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
-          (max_r, max_q, d_ker(max_q), qs_ker(max_q)))
-
-    post_success_rates = np.array([])
-    # Rejection Iteration (vectorized!)
+    # Rejection Sampling
     r_vals = d_ker(qs) / qs_ker(qs)
     eta = r_vals / max_r 
-
-    # Accept based on uniform random draw
     accept_mask = eta > np.random.uniform(0, 1, M)
     post_success_rates = success_rates[accept_mask]
 
-    post_qs = QoI_single(post_success_rates, prep_state=prep_state)
-    post_ker = ss.gaussian_kde(post_qs)
+    # Handle case where rejection sampling rejects everything
+    if len(post_success_rates) == 0:
+        print("   Warning: Rejection sampling rejected all points. Returning priors.")
+        return success_rates, success_rates
 
-    # Logging
-    print('Accepted N: %d (%.1f%%)' % (len(post_success_rates), 100*len(post_success_rates)/M))
-    print(f'Posterior Mean for preparing {prep_state}: success rate ~ {np.mean(post_success_rates):.6f}')
-
-    # Save results as a 1D array
+    print('   Accepted N: %d (%.1f%%)' % (len(post_success_rates), 100*len(post_success_rates)/M))
+    
+    # Save
     filename = file_address + f'Post_Qubit{interested_qubit}.csv'
     np.savetxt(filename, post_success_rates, delimiter=',')
-
-    # --------------------- Plotting ---------------------
-    xs = np.linspace(0, 1, 1000)
-    # Plotting range depends on prep_state (0 is high, 1 is low)
-    if prep_state == '0':
-        xsd = np.linspace(0.96, 1.0, 500)
-    elif prep_state == '1':
-        xsd = np.linspace(0.0, 0.04, 500)
-    else:
-        print('Plotting full range for unknown prep_state, please supply prep_state "0" or "1".')
-        xsd = xs
-
-    plt.figure(figsize=(6, 4), dpi=100, facecolor='white')
-    plt.plot(np.ones_like(xsd)-xsd, d_ker(xsd), 'r--', lw=2, label='Observed Data')
-    plt.plot(np.ones_like(xsd)-xsd, post_ker(xsd), 'b-', label='Posterior Model')
-    plt.xlabel('Average Qubit Value')
-    plt.ylabel('Density')
-    plt.title(f'Calibration Qubit {interested_qubit} |{prep_state}>')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(file_address + f'QoI-Qubit{interested_qubit}.pdf')
-    plt.show()
 
     return success_rates, post_success_rates
 
@@ -901,91 +404,53 @@ class SplitMeasFilter:
           Not None after execute inference()
           
     """
-    def __init__(self, qubit_order, home_dir, data=None, file_address='data/'):
-        self.home_dir = home_dir
-        os.chdir(home_dir)
+    def __init__(self, qubit_order, home_dir=None, data=None, file_address='data/'):
+        if home_dir:
+            self.home_dir = home_dir
+            try:
+                os.chdir(home_dir)
+            except FileNotFoundError:
+                print(f"Warning: home_dir {home_dir} not found.")
+
         self.file_address = file_address
         self.qubit_order = qubit_order
         
-        # Initialize storage structures
         self.prior = {}
         self.post = {}
         self.post_marginals = {f'Qubit{q}': {'0': np.array([]), '1': np.array([])} for q in qubit_order}
         self.params = None
-        self.mat_mean = None
-        self.mat_mode = None
-
-        # Load Data
+        
         self.data = {'0': np.array([]), '1': np.array([])}
-
         if data is not None:
-            # If user passes data directly, assume it's a dict or handle accordingly
             if isinstance(data, dict):
                 self.data = data
             else:
-                print("Warning: Direct data passed as array. Assuming it belongs to State '0'.")
                 self.data['0'] = np.atleast_1d(data)
         else:
-            # Load from separate files
             self._load_data_from_files()
-            
+
     def _load_data_from_files(self):
-        """Loads Filter_data_0.csv and Filter_data_1.csv into the dictionary."""
-        # Load State 0
-        try:
-            path0 = self.file_address + 'Filter_data_0.csv'
-            df0 = pd.read_csv(path0, header=None, dtype=str)
-            self.data['0'] = df0.values.flatten()
-            print(f"Loaded {len(self.data['0'])} shots for State 0.")
-        except (FileNotFoundError, pd.errors.EmptyDataError):
-            print(f"Warning: {path0} not found. State 0 inference will fail.")
-
-        # Load State 1
-        try:
-            path1 = self.file_address + 'Filter_data_1.csv'
-            df1 = pd.read_csv(path1, header=None, dtype=str)
-            self.data['1'] = df1.values.flatten()
-            print(f"Loaded {len(self.data['1'])} shots for State 1.")
-        except (FileNotFoundError, pd.errors.EmptyDataError):
-            print(f"Warning: {path1} not found. State 1 inference will fail.")
-        
-    def create_filter_mat(self):
-        """
-        Calculates and stores the 2x2 inverse matrices for each qubit individually.
-        This replaces the creation of the massive 2^N x 2^N matrix.
-        """
-        self.inv_matrices_mean = []
-        self.inv_matrices_mode = []
-
-        for q in self.qubit_order:
-            q_key = f'Qubit{q}'
-            
-            # --- MEAN STRATEGY ---
-            # Retrieve the marginal measurement errors from posterior
-            res_0 = self.post_marginals[q_key]['0']
-            res_1 = self.post_marginals[q_key]['1']
-            
-            lam0_mean = safe_mean(res_0) # 1 - error_on_0
-            lam1_mean = safe_mean(res_1) # 1 - error_on_1
-            
-            # Build scalable 2x2 A matrix and invert it
-            A_mean = np.array([[lam0_mean, 1 - lam1_mean],
-                               [1 - lam0_mean, lam1_mean]])
+        # State 0
+        path0 = os.path.join(self.file_address, 'Filter_data_0.csv')
+        if os.path.exists(path0):
             try:
-                self.inv_matrices_mean.append(np.linalg.inv(A_mean))
-            except np.linalg.LinAlgError:
-                self.inv_matrices_mean.append(np.eye(2)) # Fallback if singular
+                self.data['0'] = pd.read_csv(path0, header=None, dtype=str).values.flatten()
+                print(f"Loaded {len(self.data['0'])} shots for State 0.")
+            except Exception as e:
+                print(f"Error reading {path0}: {e}")
+        else:
+            print(f"Warning: {path0} not found.")
 
-            # --- MODE STRATEGY ---
-            lam0_mode = find_mode(res_0)
-            lam1_mode = find_mode(res_1)
-            
-            A_mode = np.array([[lam0_mode, 1 - lam1_mode],
-                               [1 - lam0_mode, lam1_mode]])
+        # State 1
+        p1 = os.path.join(self.file_address, 'Filter_data_1.csv')
+        if os.path.exists(p1):
             try:
-                self.inv_matrices_mode.append(np.linalg.inv(A_mode))
-            except np.linalg.LinAlgError:
-                self.inv_matrices_mode.append(np.eye(2))
+                self.data['1'] = pd.read_csv(p1, header=None, dtype=str).values.flatten()
+                print(f"Loaded {len(self.data['1'])} shots for State 1.")
+            except Exception as e:
+                print(f"Error reading {p1}: {e}")
+        else:
+            print(f"Warning: {p1} not found.")
 
     def inference(self,
                   nPrior=40000,
@@ -1023,145 +488,118 @@ class SplitMeasFilter:
         None.
 
         """
+        # Select Data
+        current_data = self.data.get(prep_state, np.array([]))
+        total_shots = len(current_data)
 
-        # Ensure data is valid and has a length (Fixes 'unsized object' error)
-        if self.data is None:
-            raise ValueError("No data provided to inference engine.")
-        
-        # Force data to be at least 1D array so len() works
-        self.data = np.atleast_1d(self.data)
-        
-        if len(self.data) == 0:
-             raise ValueError("Data array is empty.")
+        if total_shots == 0:
+             print(f"CRITICAL: No data for prep_state='{prep_state}'. Skipping.")
+             return
 
-        # we check if we actually have params. If not, we use defaults immediately.        
-        try:
-            if self.params is None:
-                 raise Exception("No params, skip to default.")
+        # Robust Grouping Calculation
+        num_points = int(total_shots / shots_per_point)
+        # Ensure at least 20 points for KDE
+        if num_points < 20:
+            print(f"   Notice: Adjusting grouping. (Original points: {num_points})")
+            num_points = 20
+            # Fallback if total data is tiny
+            if total_shots < 20: 
+                num_points = total_shots
+
+        # Trim data for perfect division
+        remainder = total_shots % num_points
+        if remainder != 0:
+            valid_data = current_data[:-remainder]
+        else:
+            valid_data = current_data
             
-            itr = self.params[0]['itr']
-            shots = self.params[0]['shots']
-            num_points = int(itr * shots / shots_per_point)
-            
-        except Exception:
-            # Fallback: Calculate points based on data length
-            num_points = int(len(self.data) / shots_per_point)
-            
-            # Ensure at least 1 point
-            if num_points < 1: 
-                num_points = 1
-                
-            # Set default error parameters (0.5% error) if not present
+        print(f"   Debug: Using {len(valid_data)} shots split into {num_points} points for KDE.")
+
+        # Setup Params
+        if self.params is None:
             self.params = {}
             for q in self.qubit_order:
-                self.params[q] = {}
-                self.params[q]['pm1p0'] = 0.005 
-                self.params[q]['pm0p1'] = 0.005
+                self.params[q] = {'pm1p0': 0.005, 'pm0p1': 0.005}
 
-        # RUN INFERENCE LOOP
-        info = {}
+        # Inference Loop
         for i in self.qubit_order:
             print(f'Inferring Qubit {i} for State |{prep_state}>')
             
-            d = getData0(self.data, num_points, i)
-            
-            # Construct filename safely
+            try:
+                d = getData0(valid_data, num_points, i)
+            except Exception as e:
+                print(f"   Error in getData0: {e}")
+                continue
+
+            if len(d) < 5:
+                print(f"   Error: Resulting dataset too small (len={len(d)}). Skipping Qubit {i}.")
+                continue
+
             state_prefix = self.file_address + f"State{prep_state}_"
             
-            prior_lambdas, post_lambdas = output(
-                d,
-                i,
-                nPrior,
-                self.params,
-                prior_sd,
-                seed=seed,
-                file_address=state_prefix,
-                prep_state=prep_state)
-            
-            # Store results
-            self.prior['Qubit' + str(i)] = prior_lambdas
-            self.post['Qubit' + str(i)] = post_lambdas
-            
-            if prep_state == '0':
-                # 0 error rate
-                self.post_marginals[f'Qubit{i}']['0'] = post_lambdas
-            elif prep_state == '1':
-                # 1 error rate
-                self.post_marginals[f'Qubit{i}']['1'] = post_lambdas
+            try:
+                prior_lambdas, post_lambdas = output(
+                    d, i, nPrior, self.params, prior_sd, 
+                    seed=seed, file_address=state_prefix, prep_state=prep_state
+                )
                 
-        # Check if we can build the full matrix (only if we have both 0 and 1 data)
+                self.prior[f'Qubit{i}'] = prior_lambdas
+                self.post[f'Qubit{i}'] = post_lambdas
+                self.post_marginals[f'Qubit{i}'][prep_state] = post_lambdas
+            except Exception as e:
+                print(f"   Inference failed for Qubit {i}: {e}")
+                
+        # Matrix Creation (Safe Check)
         first_q = f'Qubit{self.qubit_order[0]}'
-        if (self.post_marginals[first_q]['0'] is not None and 
-            self.post_marginals[first_q]['1'] is not None):
+        has_0 = len(self.post_marginals[first_q]['0']) > 0
+        has_1 = len(self.post_marginals[first_q]['1']) > 0
+        
+        if has_0 and has_1:
             self.create_filter_mat()
 
-    def post_from_file(self):
-        """
-        Loads the separated posterior files into post_marginals.
-        Expects files named: 'State0_Post_QubitX.csv' and 'State1_Post_QubitX.csv'
-        """
-        for i in self.qubit_order:
-            # 1. Load State 0 Data
-            try:
-                file_0 = self.file_address + f"State0_Post_Qubit{i}.csv"
-                data_0 = pd.read_csv(file_0, header=None).to_numpy()
-                self.post_marginals[f'Qubit{i}']['0'] = data_0[:, 0] # Col 0 is valid for State 0
-            except FileNotFoundError:
-                print(f"Warning: Could not find State 0 calibration for Qubit {i}")
+    def create_filter_mat(self):
+        self.inv_matrices_mean = []
+        self.inv_matrices_mode = []
 
-            # 2. Load State 1 Data
-            try:
-                file_1 = self.file_address + f"State1_Post_Qubit{i}.csv"
-                data_1 = pd.read_csv(file_1, header=None).to_numpy()
-                self.post_marginals[f'Qubit{i}']['1'] = data_1[:, 1] # Col 1 is valid for State 1
-            except FileNotFoundError:
-                print(f"Warning: Could not find State 1 calibration for Qubit {i}")
+        for q in self.qubit_order:
+            q_key = f'Qubit{q}'
+            res_0 = self.post_marginals[q_key]['0']
+            res_1 = self.post_marginals[q_key]['1']
+            
+            # Check for empty data before calculating mean
+            if len(res_0) == 0 or len(res_1) == 0:
+                print(f"Warning: Skipping Matrix for Qubit {q} (Incomplete Inference)")
+                self.inv_matrices_mean.append(np.eye(2))
+                self.inv_matrices_mode.append(np.eye(2))
+                continue
 
-        # Re-build matrix
-        self.create_filter_mat()
+            # MEAN
+            lam0_mean = safe_mean(res_0)
+            lam1_mean = safe_mean(res_1)
+            A_mean = np.array([[lam0_mean, 1 - lam1_mean], [1 - lam0_mean, lam1_mean]])
+            try:
+                self.inv_matrices_mean.append(np.linalg.inv(A_mean))
+            except:
+                self.inv_matrices_mean.append(np.eye(2))
+
+            # MODE
+            lam0_mode = find_mode(res_0)
+            lam1_mode = find_mode(res_1)
+            A_mode = np.array([[lam0_mode, 1 - lam1_mode], [1 - lam0_mode, lam1_mode]])
+            try:
+                self.inv_matrices_mode.append(np.linalg.inv(A_mode))
+            except:
+                self.inv_matrices_mode.append(np.eye(2))
 
     def mean(self):
-        """
-           return posterior mean. Now uses the post_marginals for calculation, as fitting new paradigm
-
-        Returns
-        -------
-        res : dict
-            posterior mean of qubits. E.g. 
-            {'Qubti0': [...], 'Qubti1': [...], ...}
-
-        """
         res = {}
         for q in self.qubit_order:
             q_key = f'Qubit{q}'
-            # Calculate mean of the valid columns
-
             m0 = safe_mean(self.post_marginals[q_key]['0'])
             m1 = safe_mean(self.post_marginals[q_key]['1'])
-
             res[q_key] = np.array([m0, m1])
-        return res
-
-    def mode(self):
-        """
-           return posterior MAP.
-
-        Returns
-        -------
-        res : dict
-            posterior mean of qubits. E.g. 
-            {'Qubti0': [...], 'Qubti1': [...], ...}
-
-        """
-        res = {}
-        for q in self.qubit_order:
-            q_key = f'Qubit{q}'
-            # Calculate mode of the valid columns
-            m0 = find_mode(self.post_marginals[q_key]['0'])
-            m1 = find_mode(self.post_marginals[q_key]['1'])
-            res[q_key] = np.array([m0, m1])
-        return res
-
+        return res    
+    
     def _apply_tensor_inversion(self, counts, inv_matrices):
         """
         Helper function to apply the chain of inverses to a probability vector.
