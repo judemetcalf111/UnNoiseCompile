@@ -38,6 +38,10 @@ Then install packages:
 
 `pip install -r requirements.txt`
 
+To allow access to the `src/` folder for scripts, run the following to allow python to recognise the `__init__.py` and `setup.py` files already present:
+
+`pip install -e .`
+
 And run from there!
 
 ## The Workflow
@@ -49,7 +53,7 @@ You can either supply data into `SplitMeasFilter`directly, using an array-like o
 The script has the capacity to run inference on data gathered from an expected |0> state or an expected |1> state, gathering bitflip error rates in both directions (both towards and away from the ground-state)
 
 ```python
-from splitmeasfilter import SplitMeasFilter
+from src.splitmeasfilter import SplitMeasFilter
 
 # 1. Define Qubits and Data/Path
 qubits = [0, 1, 6]
@@ -87,7 +91,7 @@ meas_filter.post_marginals['Qubit0']['0']
 After gathering data from a circuit applying the same gate to each qubit a set number of times, using the SplitGateFilter class, the gate error can be inferred. The data should be placed into the directory marked by `data_file_address`, with the files named as `Readout_{gate_num}{gate_type}Q{QubitNumber}.csv`.
 
 ```python
-from splitgatefilter import SplitGateFilter
+from src.splitgatefilter import SplitGateFilter
 
 # 1. Setup
 gate_path = './data/gate_exp/'
@@ -153,10 +157,12 @@ plt.show()
 
 ### Denoising
 
-It is difficult and often intractable to denoise using the gate bitflip errors, the best method would be to compile the least noisy gates, to minimise errors. However, an efficient polynomial denoiser is here developed for the measurement error outputs. To denoise, run:
+It is difficult and often intractable to denoise using the gate bitflip errors, the best method would be to compile the least noisy gates, to minimise errors. 
+
+However, an efficient denoiser of **measurement error** in polynomial time is possible is here developed for use of cleaning quantum bitstring outputs to better estimate the final quantum state. To denoise, run:
 
 ```python
-from splitmeasfilter import SplitMeasFilter
+from src.splitmeasfilter import SplitMeasFilter
 
 qubits = [0,1,...]
 meas_filter = SplitMeasFilter(qubit_order=qubits, file_address='./data/meas_cal')
