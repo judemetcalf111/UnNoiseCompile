@@ -7,13 +7,13 @@ import random
 import time
 import networkx as nx
 
-# Data Style
-graph_data = {
-    '2': ['6'],
-    '6': ['2', '5', '7', '12'],
-    '3': ['4', '9'],
-    #...
-}
+# # Data Style
+# graph_data = {
+#     '2': ['6'],
+#     '6': ['2', '5', '7', '12'],
+#     '3': ['4', '9'],
+#     #...
+# }
 
 class AdvancedGraphSolver:
     def __init__(self, raw_data, max_sets=4):
@@ -28,9 +28,9 @@ class AdvancedGraphSolver:
         for u, neighbors in raw_data.items():
             if not neighbors: continue # Ignore true islands
             
-            # Warn if degree > max_sets (Pigeonhole principle violation)
+            # Warn if degree > max_sets (Need more than 4 cicuits to cover)
             if len(neighbors) > max_sets:
-                print(f"WARNING: Node {u} has {len(neighbors)} connections. It cannot be fully covered by {max_sets} sets.")
+                print(f"WARNING: Qubit {u} has {len(neighbors)} connections. It cannot be fully covered by {max_sets} Circuits.")
 
             for v in neighbors:
                 u_int, v_int = int(u), int(v)
@@ -48,7 +48,7 @@ class AdvancedGraphSolver:
                 self.raw_adj[str(u)].add(str(v))
                 self.raw_adj[str(v)].add(str(u))
 
-    # --- PART 1: KEMPE CHAIN COLORING (Valid Partition) ---
+    # KEMPE CHAIN colouring
     def get_free_colors(self, u):
         used = {self.adj[u][v] for v in self.adj[u] if self.adj[u][v] is not None}
         return set(range(1, self.max_sets + 1)) - used
@@ -106,7 +106,7 @@ class AdvancedGraphSolver:
                     sets[color-1].add((u, v))
         return sets
 
-    # --- PART 2: DENSITY MAXIMIZATION (Augmenting Paths) ---
+    # Density Maximisation to maximise the qubits tested on any given run
     def improve_matching(self, current_set_pairs):
         """Tries to rescue 'stranded' nodes by flipping edges (A-B, C-D) <-> (A-C, B-D)"""
         # Convert to dictionary for easy traversal
@@ -162,7 +162,7 @@ class AdvancedGraphSolver:
 
     def maximize_sets(self, valid_sets):
         final_sets = []
-        for i, s in enumerate(valid_sets):
+        for _, s in enumerate(valid_sets):
             current_set = set(s)
             
             # Loop a few times to iteratively improve
