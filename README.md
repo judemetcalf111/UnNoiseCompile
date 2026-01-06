@@ -153,7 +153,9 @@ plt.show()
 
 ### Denoising
 
-It is difficult and often intractable to denoise using the gate bitflip errors, the best method would be to compile the least noisy gates, to minimise errors. However, an efficient polynomial denoiser is here developed for the measurement error outputs. To denoise, run:
+It is difficult and often intractable to denoise using the gate bitflip errors, the best method would be to compile the least noisy gates, to minimise errors. 
+
+However, an efficient denoiser of **measurement error** in polynomial time is possible is here developed for use of cleaning quantum bitstring outputs to better estimate the final quantum state. To denoise, run:
 
 ```python
 from splitmeasfilter import SplitMeasFilter
