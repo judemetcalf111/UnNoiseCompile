@@ -1,10 +1,5 @@
-import networkx as nx
-from braket.aws import AwsDevice
-from braket.devices import Devices
 import collections
 import random
-import time
-import networkx as nx
 
 # # Data Style
 # graph_data = {
