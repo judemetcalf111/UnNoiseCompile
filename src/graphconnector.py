@@ -1,7 +1,6 @@
 import networkx as nx
 from braket.aws import AwsDevice
 from braket.devices import Devices
-%matplotlib inline
 import collections
 import random
 import time
