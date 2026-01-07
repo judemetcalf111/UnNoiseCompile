@@ -113,7 +113,14 @@ As this problem is equivalent to the maximal edge-colouring problem from graph t
 | | |
 |:---:|:---:|
 | <img src="resources/Emerald0.png" width="400" /> | <img src="resources/Emerald1.png" width="400" /> |
-| <img src="resources/Emerald2.png" width="400" /> | <img src="resources/Emerald3.png" width="400" /> |#### 2b. Inference 
+| <img src="resources/Emerald2.png" width="400" /> | <img src="resources/Emerald3.png" width="400" /> |
+
+| | |
+|:---:|:---:|
+| <img src="resources/Ankaa-3_0.png" width="400" /> | <img src="resources/Ankaa-3_1.png" width="400" /> |
+| <img src="resources/Ankaa-3_2.png" width="400" /> | <img src="resources/Ankaa-3_3.png" width="400" /> |
+
+#### 2b. Inference 
 
 After gathering data from a circuit applying the same gate to each qubit a set number of times, using the SplitGateFilter class, the gate error can be inferred. The data should be placed into the directory marked by `data_file_address`, with the files named as `Readout_{gate_num}{gate_type}Q{QubitNumber}.csv`.
 
