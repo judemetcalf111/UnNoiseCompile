@@ -110,12 +110,10 @@ As this problem is equivalent to the maximal edge-colouring problem from graph t
 
 **The** `graphconnector.py` **script and its `AdvancedGraphSolver` class is an implementation using Kempe Chains and graph reordering to produce valid data aand maximise data quality and efficiency.**
 
-<img width="601" height="468" alt="Image" src="https://github.com/user-attachments/assets/c82f0720-a5d8-4e5c-9382-0efec4ffa716" />
-<img width="621" height="467" alt="Image" src="https://github.com/user-attachments/assets/4340ab0d-f230-46fe-8719-4c899e9b480e" />
-<img width="599" height="462" alt="Image" src="https://github.com/user-attachments/assets/4484714e-4eb7-490f-8f76-fc26cca74ca4" />
-<img width="559" height="445" alt="Image" src="https://github.com/user-attachments/assets/0b3c833c-b1ad-4ee3-9137-de604ac28b3d" />
-
-#### 2b. Inference 
+| | |
+|:---:|:---:|
+| <img src="resources/graph0.png" width="300" /> | <img src="resources/graph1.png" width="300" /> |
+| <img src="resources/graph2.png" width="300" /> | <img src="resources/graph3.png" width="300" /> |#### 2b. Inference 
 
 After gathering data from a circuit applying the same gate to each qubit a set number of times, using the SplitGateFilter class, the gate error can be inferred. The data should be placed into the directory marked by `data_file_address`, with the files named as `Readout_{gate_num}{gate_type}Q{QubitNumber}.csv`.
 
