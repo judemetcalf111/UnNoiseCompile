@@ -6,6 +6,7 @@ Created on Wed Dec 31 13:18:38 2025
 """
 import os
 import csv
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import scipy.stats as ss
@@ -14,6 +15,7 @@ from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 from aquarel import load_theme
 from braket.aws import AwsDevice
+
 
 # Optional: Apply theme if available
 try:
@@ -460,10 +462,21 @@ class SplitMeasFilter:
         self.qubit_order = qubit_order
         
         self.prior = {}
-        self.post = {}
         self.post_marginals = {f'Qubit{q}': {'0': np.array([]), '1': np.array([])} for q in qubit_order}
+        posterior0path = Path(os.path.join(self.file_address, 'State0_Post_Qubit' + str(self.qubit_order[0]) + '.csv'))
+        posterior1path = Path(os.path.join(self.file_address, 'State1_Post_Qubit' + str(self.qubit_order[0]) + '.csv'))
+        if (posterior0path.is_file() and posterior1path.is_file()):
+            self._load_posterior_marginals()
         self.params = None if device is None else get_braket_calibration_dict(device, n_qubits=len(qubit_order))
+        self.inv_matrices_mean = []
+        self.inv_matrices_mode = []
+        if self.post_marginals[f'Qubit{self.qubit_order[0]}']['0'].size > 0 and self.post_marginals[f'Qubit{self.qubit_order[0]}']['1'].size > 0:
+            self.create_filter_mat()
+            self.post = {f'{q}': {'e0_mean': float(np.mean(self.post_marginals[f'Qubit{q}']['0'])), 'e1_mean': float(np.mean(self.post_marginals[f'Qubit{q}']['1'])),
+                                       'e0_mode': float(ss.mode(self.post_marginals[f'Qubit{q}']['0'])[0]), 'e1_mode': float(ss.mode(self.post_marginals[f'Qubit{q}']['1'])[0]),
+                                       } for q in qubit_order}
         
+
         self.data = {'0': np.array([]), '1': np.array([])}
         if data is not None:
             if isinstance(data, dict):
@@ -473,9 +486,19 @@ class SplitMeasFilter:
         else:
             self._load_data_from_files()
 
+    def _load_posterior_marginals(self):
+        for prep_state in ['0', '1']:
+            for q in self.qubit_order:
+                path = os.path.join(self.file_address, f'State{prep_state}_Post_Qubit{q}.csv')
+                try:
+                    self.post_marginals[f'Qubit{q}'][prep_state] = pd.read_csv(path, header=None, dtype=float).values.flatten()
+                    print(f"Loaded {len(self.post_marginals[f'Qubit{q}'][prep_state])} Posterior Values for Qubit {q}, State {prep_state}.")
+                except Exception as e:
+                    print(f"Error reading {path}: {e}")
+
     def _load_data_from_files(self):
         # State 0
-        path0 = os.path.join(self.file_address, 'Filter_data_0.csv')
+        path0 = os.path.join(self.file_address, 'State0.csv')
         if os.path.exists(path0):
             try:
                 self.data['0'] = pd.read_csv(path0, header=None, dtype=str).values.flatten()
@@ -486,7 +509,7 @@ class SplitMeasFilter:
             print(f"Warning: {path0} not found.")
 
         # State 1
-        p1 = os.path.join(self.file_address, 'Filter_data_1.csv')
+        p1 = os.path.join(self.file_address, 'State1.csv')
         if os.path.exists(p1):
             try:
                 self.data['1'] = pd.read_csv(p1, header=None, dtype=str).values.flatten()
@@ -588,7 +611,6 @@ class SplitMeasFilter:
                 )
                 
                 self.prior[f'Qubit{i}'] = prior_lambdas
-                self.post[f'Qubit{i}'] = post_lambdas
                 self.post_marginals[f'Qubit{i}'][prep_state] = post_lambdas
             except Exception as e:
                 print(f"   Inference failed for Qubit {i}: {e}")
@@ -690,7 +712,7 @@ class SplitMeasFilter:
     def filter_mode(self, counts):
         return self._apply_tensor_inversion(counts, self.inv_matrices_mode)
     
-    def get_inverse_element(self, target_bitstring, source_bitstring):
+    def get_inverse_element(self, target_bitstring, source_bitstring, method = 'mean'):
         """
         Calculates the probability transition factor from Source (Noisy) -> Target (Clean).
         Mathematically: returns the element (Row=Target, Col=Source) of the Inverse Matrix.
@@ -700,7 +722,7 @@ class SplitMeasFilter:
             source_bitstring (str): The 'noisy' state we actually measured.
         """
         # Ensure we have the matrices
-        if self.inv_matrices_mean is None:
+        if not self.inv_matrices_mean:
             self.create_filter_mat()
             
         probability_factor = 1.0
@@ -716,7 +738,12 @@ class SplitMeasFilter:
             # Retrieve the specific value from the 2x2 inverse matrix
             # inv_matrices_mean is a list of 2x2 matrices for [q0, q1, ...]
             # We must access the matrix corresponding to 'i' (the current qubit loop index)
-            elem = self.inv_matrices_mean[i][t_val, s_val]
+            if method == 'mean':
+                elem = self.inv_matrices_mean[i][t_val, s_val]
+            elif method == 'mode':
+                elem = self.inv_matrices_mode[i][t_val, s_val]
+            else:
+                raise ValueError("method must be 'mean' or 'mode'")
             
             probability_factor *= elem
             
@@ -759,7 +786,7 @@ class SplitMeasFilter:
         return prob
     
 
-    def eff_DeNoise(self, datadict, percentage=100, verbose=True, GD = False, lr=0.1, max_iter=50):
+    def eff_DeNoise(self, datadict, method = 'mean', percentage=100, verbose=True, GD = False, lr=0.1, max_iter=50):
         """
         Efficient DeNoiser function that applies the SplitMeasFilter to the provided data dictionary.
         
@@ -798,7 +825,7 @@ class SplitMeasFilter:
             for s_str, s_count in important_dict.items():
                 # Calculate probability of Source(s) flipping to Target(t)
                 # This is the "Likelihood of changing/remaining"
-                weight = self.get_inverse_element(t_str, s_str) # M_inv(target_bitstring=t_str, source_bitstring=s_str)
+                weight = self.get_inverse_element(t_str, s_str, method = method) # M_inv(target_bitstring=t_str, source_bitstring=s_str)
                 
                 # Add contribution: (Inverse Element) * (Observed Probability)
                 s_prob = s_count / filtered_shots
