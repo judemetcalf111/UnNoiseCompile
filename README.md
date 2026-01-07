@@ -29,7 +29,7 @@ Project_Root/
 ```
 
 ## Getting Started
-
+\
 Built using Python 3.11.14, mostly using Jupyter notebooks in `/notebooks` and `/scripts/` and Python modules in `/src`. To make a .venv: 
 
 `python3.11 -m venv .venv`
@@ -52,34 +52,45 @@ And run from there!
 
 ### 1. Measurement Data
 
-You can either supply data into `SplitMeasFilter`directly, using an array-like object called `data`, filled with bitstrings, or by placing a similar file called `Filter_data.csv` in the path defined by `file_address`.
+You can either supply probing bitstring data into the `SplitMeasFilter` class directly, using an array-like parameter called `data`, filled with bitstrings, or by placing a csv file named `Filter_data.csv` in the path defined by the `file_address` parameter. If both are given, the class will use the `data` object.
 
-The script has the capacity to run inference on data gathered from an expected |0> state or an expected |1> state, gathering bitflip error rates in both directions (both towards and away from the ground-state)
+The script is designed to run inference on data gathered from an expected |000...000> state and an expected |111...111> state individually. This will allow the inference of bitflip error rates in both directions (both towards and away from the ground-state)
+
 
 ```python
 from src.splitmeasfilter import SplitMeasFilter
 
-# 1. Define Qubits and Data/Path
+# Define Qubits and Data/Path
 qubits = [0, 1, 6]
-meas_path = './data/meas_cal/' # Pointing to a directory containing `Filter_data.csv`
+
+# 1a. Define directory containing `Filter_data.csv`
+meas_path = './data/meas_cal/'
+
+# 1b. Or we can Define an array-like object of the same bitstring data
 meas_data = ['011110','111110','110110','010010','111111','111101','110100',...]
 
-# 2a. Instantiate Data (file)
+# 2a. Instantiate Data (from `Filter_data.csv` file)
 meas_filter = SplitMeasFilter(qubit_order=qubits, file_address=meas_path)
 
-# 2b. Instantiate Data (array-like)
+# 2b. Instantiate Data (from array-like `meas_data` object)
 meas_filter = SplitMeasFilter(qubit_order=qubits, data=meas_data)
 ```
-
+\
 We can then run inference on this data. Ensure that you track the number of shots, as this will divide the total into several batches, each of size 'shots_per_point':
 
 ```python
-# Applying the meas_filter.inference() function, on batches of size shots_per_point
-# The 'prep_state' variable can be '0' or '1', and enters the prepared state, either
-# 0 or 1, and thus defines the error rate tested for.
-meas_filter.inference(nPrior=40000, prior_sd=0.1, shots_per_point=1024, seed=28, prep_state='0')
-```
+# Applying the meas_filter.inference() function
+# on batches of size shots_per_point
+# The 'prep_state' variable can be '0' or '1', defining either
+# |000...000> or |111...111> to infer either error in measuring |0> or |1>
 
+meas_filter.inference(nPrior=40000,          # Number of tested error rates
+                        prior_sd=0.1,        # The sd of the prior distribution
+                        shots_per_point=1024,# Number of shots in each batch
+                        seed=28,             # Seed for the rejection sampling
+                        prep_state='0')      # Prepared state (for |0> or |1>)
+``` 
+\
 This will produce files `State0_Post_Qubit0.csv`, `State0_Post_Qubit1.csv`, and `State0_Post_Qubit6.csv`, which contain the posterior distributions of measurement errors, in the form of rejection-sampled error rates. This will output plots of observed data against the posterior model. To reproduce these, along with the distribution statistics, and optionally save, run:
 ```python
 meas_filter.error_distributions(plotting=True, save_plots=True)
@@ -89,8 +100,17 @@ And this will produce the error rate variables in the `MeasFilter` class. The fo
 meas_filter.post_marginals['Qubit0']['0']
 ```
 
-
 ### 2. Gate Data
+
+#### 2a. Designing a Testing Circuit
+
+It is not a trivial problem to design an efficient circuit to test 2-qubit gates. If the _Controlled-Z_ gate is the native 2-qubit gate (as for most superconducting QPUs at the time of writing in January of 2026), there is no direction to the gate, so _CZ[Q1-Q2]_ is the same as _CZ[Q2-Q1]_, so we need only test every connection between qubits. However, the superconducting qubits are arranged in somewhat complex arrangements on a cartesian grid, with a maximum connectivity of any qubit being 4. We need to construct 4 circuits, where each _CZ_ connection is tested in at least one of these circuits.
+
+As this problem is equivalent to the maximal edge-colouring problem from graph theory, there are many algorithms which have been developed to efficiently generate solutions to this exact problem, 'colouring' each connection at least once, and if possible, multiple times. Using graph theory, we can also say that since the qubits are arranged on a grid, it is a bipartite graph, and thus by König's Theorem it is class 1, and only 4 circuits (and not 5) are required (for this idea, see Vizing's Theorem).
+
+**The** `graphconnector.py` **script and its `AdvancedGraphSolver` class is an implementation using Kempe Chains and graph reordering to produce valid data aand maximise data quality and efficiency.**
+
+#### 2b. Inference 
 
 After gathering data from a circuit applying the same gate to each qubit a set number of times, using the SplitGateFilter class, the gate error can be inferred. The data should be placed into the directory marked by `data_file_address`, with the files named as `Readout_{gate_num}{gate_type}Q{QubitNumber}.csv`.
 
@@ -104,12 +124,12 @@ gate_path = './data/gate_exp/'
 # 2. Instantiate
 # Note: data_file_address is often used for both I/O in the current script. 
 # Ensure raw gate data (Readout_) is inside 'gate_path'.
-gate_filter = SplitGateFilter(interested_qubits=[0], 
-                              gate_num=100, 
+gate_filter = SplitGateFilter(interested_qubits=[0],
+                              gate_num=100,
                               gate_type='X',
                               work_dir='./results',
                               data_file_address=gate_path,
-                              meas_cal_dir=meas_path) 
+                              meas_cal_dir=meas_path)
 
 ```
 
