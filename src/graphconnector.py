@@ -459,83 +459,116 @@ class MisraGriesSolver:
 # Only to be used on small QPUs due to performance.
 sys.setrecursionlimit(500000)
 
-class ExactGraphSolver:
-    def __init__(self, raw_data, max_sets=4):
+class MinConflictsSolver:
+    def __init__(self, raw_data, max_sets=4, max_steps=100000):
         self.max_sets = max_sets
-        self.adj = {} # Adjacency: self.adj[u][v] = colour
+        self.max_steps = max_steps
+        self.adj = collections.defaultdict(dict)
         self.all_edges = []
         
-        # --- PRE-PROCESSING ---
+        # --- Pre-processing ---
         seen = set()
         for u, neighbors in raw_data.items():
-            if u not in self.adj: self.adj[u] = {}
+            # Initialize nodes in adjacency dict to ensure safe lookups later
+            if str(u) not in self.adj: self.adj[str(u)] = {}
             
             for v in neighbors:
-                if v not in self.adj: self.adj[v] = {}
-                
                 u_int, v_int = int(u), int(v)
                 p1, p2 = min(u_int, v_int), max(u_int, v_int)
                 u_str, v_str = str(p1), str(p2)
                 
+                # Ensure neighbor structure exists
+                if v_str not in self.adj: self.adj[v_str] = {}
+
+                # Store edge in standardized format
                 if (u_str, v_str) not in seen:
                     self.all_edges.append((u_str, v_str))
                     seen.add((p1, p2))
-                    # Initialize as None (uncoloured)
+                    
+                    # Update adjacency structure
+                    # We store None initially; the coloring logic uses a separate dict
                     self.adj[u_str][v_str] = None
                     self.adj[v_str][u_str] = None
 
-        # Heuristic: Sort edges by "Degree Sum". 
-        # Hardest edges (connecting two busy hubs) are processed first to fail fast.
-        self.all_edges.sort(key=lambda pair: len(self.adj[pair[0]]) + len(self.adj[pair[1]]), reverse=True)
-
-    def is_valid(self, u, v, colour):
-        """Checks if assigning 'colour' to (u,v) causes a conflict."""
-        # Check u's existing edges
-        for neighbor, c in self.adj[u].items():
-            if c == colour: return False
-        # Check v's existing edges
-        for neighbor, c in self.adj[v].items():
-            if c == colour: return False
-        return True
-
-    def backtrack(self, edge_index):
-        # Base Case: All edges successfully coloured
-        if edge_index == len(self.all_edges):
-            return True
-
-        u, v = self.all_edges[edge_index]
-
-        # Try colours 1 through 4
-        for colour in range(1, self.max_sets + 1):
-            if self.is_valid(u, v, colour):
-                # Apply colour
-                self.adj[u][v] = colour
-                self.adj[v][u] = colour
-                
-                # Recurse to next edge
-                if self.backtrack(edge_index + 1):
-                    return True
-                
-                # Backtrack (Undo)
-                self.adj[u][v] = None
-                self.adj[v][u] = None
+    def count_conflicts(self, u, v, color, current_coloring):
+        """Counts how many neighbors would conflict if we assign 'color' to (u,v)."""
+        conflicts = 0
         
-        # If no colour works for this edge given previous choices, return False
-        return False
+        # Check u's neighbors (excluding v)
+        for neighbor in self.adj[u]:
+            if neighbor == v: continue
+            # Construct the key for the neighbor edge
+            edge_key = tuple(sorted((u, neighbor)))
+            if current_coloring.get(edge_key) == color:
+                conflicts += 1
+        
+        # Check v's neighbors (excluding u)
+        for neighbor in self.adj[v]:
+            if neighbor == u: continue
+            # Construct the key for the neighbor edge
+            edge_key = tuple(sorted((v, neighbor)))
+            if current_coloring.get(edge_key) == color:
+                conflicts += 1
+                
+        return conflicts
 
     def solve(self):
-        print(f"Attempting to solve exact matching for {len(self.all_edges)} edges...")
-        success = self.backtrack(0)
+        print(f"Repairing solution for {len(self.all_edges)} edges using Min-Conflicts...")
         
-        if not success:
-            raise ValueError("Exact solution impossible with 4 sets! (Is the graph truly Class 1?)")
+        # 1. Initialization: Assign Random Colors to all edges
+        # We store coloring in a simple dict for fast access: {(u, v): color}
+        current_coloring = {}
+        for u, v in self.all_edges:
+            current_coloring[(u, v)] = random.randint(1, self.max_sets)
+
+        # 2. Iterative Repair Loop
+        for step in range(self.max_steps):
             
-        # Format output
+            # Find all currently conflicting edges
+            conflicted_edges = []
+            for u, v in self.all_edges:
+                c = current_coloring[(u, v)]
+                if self.count_conflicts(u, v, c, current_coloring) > 0:
+                    conflicted_edges.append((u, v))
+            
+            # SUCCESS: No conflicts left!
+            if not conflicted_edges:
+                # print(f"Solved in {step} steps.") # Optional logging
+                return self.format_output(current_coloring)
+            
+            # Pick a random conflicted edge to fix
+            u, v = random.choice(conflicted_edges)
+            
+            # Find the color that minimizes conflicts for this edge
+            min_conflicts = float('inf')
+            candidates = []
+            
+            for color in range(1, self.max_sets + 1):
+                c_score = self.count_conflicts(u, v, color, current_coloring)
+                if c_score < min_conflicts:
+                    min_conflicts = c_score
+                    candidates = [color]
+                elif c_score == min_conflicts:
+                    candidates.append(color)
+            
+            # Assign best color (break ties randomly)
+            new_color = random.choice(candidates)
+            
+            # RANDOM WALK: 
+            # With small probability (5%), pick a completely random color to escape local loops
+            if min_conflicts > 0 and random.random() < 0.05:
+                 new_color = random.randint(1, self.max_sets)
+            
+            current_coloring[(u, v)] = new_color
+
+        raise RuntimeError(f"MinConflictsSolver failed to find a solution in {self.max_steps} steps. \n"
+                           f"Possible causes: Graph is not Class 1, or max_steps is too low for this graph size.")
+
+    def format_output(self, coloring):
+        # Convert the coloring dict back into the list-of-sets format expected by generate_circuits
         sets = [set() for _ in range(self.max_sets)]
-        for u, neighbors in self.adj.items():
-            for v, colour in neighbors.items():
-                if int(u) < int(v):
-                    sets[colour-1].add((u, v))
+        for (u, v), color in coloring.items():
+            sets[color-1].add((u, v))
         return sets
 
 
