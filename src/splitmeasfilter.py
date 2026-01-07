@@ -978,7 +978,7 @@ class SplitMeasFilter:
                     d0 = getData0(self.data.get('0', np.array([])), 100, q)
                     if len(d0) > 0:
                         d0_ker = ss.gaussian_kde(d0)
-                        x0_d = np.linspace(0, max(err0_samples), 200)
+                        x0_d = np.linspace(1 - max(err0_samples), 1, 200)
                         plt.plot(1 - x0_d, d0_ker(x0_d), color='green', linestyle='--', label='Data KDE (State |0>)')
                         plt.fill_between(1 - x0_d, d0_ker(x0_d), alpha=0.1, color='green')
 
