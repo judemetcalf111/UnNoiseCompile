@@ -973,18 +973,35 @@ class SplitMeasFilter:
                     x0 = np.linspace(min(err0_samples), max(err0_samples), 200)
                     plt.plot(x0, kde0(x0), color='blue', label=r'$P(1|0)$ (Error on 0)')
                     plt.fill_between(x0, kde0(x0), alpha=0.2, color='blue')
-                    
+
+                    # Plot Data KDE for comparison
+                    d0 = getData0(self.data.get('0', np.array([])), 100, q)
+                    if len(d0) > 0:
+                        d0_ker = ss.gaussian_kde(d0)
+                        x0_d = np.linspace(0, max(err0_samples), 200)
+                        plt.plot(1 - x0_d, d0_ker(x0_d), color='green', linestyle='--', label='Data KDE (State |0>)')
+                        plt.fill_between(1 - x0_d, d0_ker(x0_d), alpha=0.1, color='green')
+
                     # Plot Error 1 (Readout error on |1>)
                     kde1 = ss.gaussian_kde(err1_samples)
                     x1 = np.linspace(min(err1_samples), max(err1_samples), 200)
                     plt.plot(x1, kde1(x1), color='red', label=r'$P(0|1)$ (Error on 1)')
                     plt.fill_between(x1, kde1(x1), alpha=0.2, color='red')
+
+                    # Plot Data KDE for comparison
+                    d1 = getData0(self.data.get('1', np.array([])), 100, q)
+                    if len(d1) > 0:
+                        d1_ker = ss.gaussian_kde(d1)
+                        x1_d = np.linspace(0, max(err1_samples), 200)
+                        plt.plot(x1_d, d1_ker(x1_d), color='orange', linestyle='--', label='Data KDE (State |1>)')
+                        plt.fill_between(x1_d, d1_ker(x1_d), alpha=0.1, color='orange')
                     
                     plt.title(f'Posterior Error Distributions - Qubit {q}')
                     plt.xlabel('Error Rate')
                     plt.ylabel('Density')
                     plt.legend()
                     plt.grid(True, alpha=0.3)
+                    plt.xlim([0,0.05])
                     
                     if save_plots:
                         plt.savefig(self.file_address + f'ErrorDist_Qubit{q}.pdf')
