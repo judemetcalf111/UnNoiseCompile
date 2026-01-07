@@ -1,4 +1,3 @@
-import sys
 import collections
 import random
 
@@ -10,6 +9,8 @@ import random
 #     #...
 # }
 
+# ----------- General Graph Cleaners, Compacters, and Confirmers -----------
+
 def verify_coverage(raw_data, final_sets):
     """
     Verifies that every connection in 'raw_data' appears at least once 
@@ -19,16 +20,16 @@ def verify_coverage(raw_data, final_sets):
         missing_edges (list): A list of edges that were NEVER tested.
         coverage_stats (dict): Stats on how well the graph is covered.
     """
-    # 1. Reconstruct the Truth (All expected unique edges)
+    # All Expected unique Couplings btwn Qubits
     expected_edges = set()
     for u, neighbors in raw_data.items():
         for v in neighbors:
-            # Normalize edge to (min, max) to handle undirected nature
+            # Normalize edge to (min, max) to handle undirected CZ nature
             u_int, v_int = int(u), int(v)
             p1, p2 = min(u_int, v_int), max(u_int, v_int)
             expected_edges.add((str(p1), str(p2)))
             
-    # 2. Flatten the generated circuits into a single set of tested edges
+    # Flatten the generated circuits into a single set of tested edges
     tested_edges = set()
     total_tests = 0
     for s in final_sets:
@@ -38,10 +39,10 @@ def verify_coverage(raw_data, final_sets):
             tested_edges.add((str(p1), str(p2)))
             total_tests += 1
 
-    # 3. Find Diff
+    # Identifying Missing Edges
     missing_edges = list(expected_edges - tested_edges)
     
-    # 4. Reporting
+    # Definitions of Stats
     circuit_count = len(final_sets)
     total_expected = len(expected_edges)
     unique_tested = len(tested_edges)
@@ -68,8 +69,8 @@ def verify_coverage(raw_data, final_sets):
 
 def compact_sets(sets):
     """
-    Post-processing to maximize density in earlier sets.
-    Tries to move edges from Set 5 -> Set 1, Set 4 -> Set 2, etc.
+    Post-processing to maximize density form later to earlier sets, in an attempt to more efficiently pack and perhaps eliminate circuits.
+    Tries to move edges from Set 5 -> Set 0,1,2,3,4, Set 4 -> Set 0,1,2,3, etc.
     """
     # Flatten sets into a list of mutable sets
     layers = [set(s) for s in sets]
@@ -112,18 +113,18 @@ def fill_with_redundancy(all_edges, current_sets):
         Fills empty slots in existing sets with redundant edges.
         PRIORITY: Edges that have been tested the least so far.
         """
-        # 1. Global Counter: How many times has each edge been tested?
+        # How many tests are done on each edge across all circuits
         edge_counts = collections.defaultdict(int)
         for s in current_sets:
             for edge in s:
                 edge_counts[edge] += 1
         
-        # Ensure all edges are in the counter (even if count is 0, though it shouldn't be)
+        # Ensure all edges are in the counter (don't miss untested edges)
         for edge in all_edges:
             if edge not in edge_counts:
                 edge_counts[edge] = 0
 
-        # 2. Iterate through each set to fill 'holes'
+        # Iterating through each set to give vacant qubit pairs extra tests
         for s in current_sets:
             # Identify which qubits are currently busy in this circuit
             busy_nodes = {n for u, v in s for n in (u, v)}
@@ -131,20 +132,20 @@ def fill_with_redundancy(all_edges, current_sets):
             # Find all valid candidates for this specific circuit
             candidates = []
             for u, v in all_edges:
-                # Rule 1: Edge must not already be in this specific circuit
+                # Edge must not already be in this specific circuit
                 if (u, v) in s:
                     continue
                 
-                # Rule 2: Both Qubits must be free in this circuit
+                # Both Qubits must be free in this circuit
                 if u not in busy_nodes and v not in busy_nodes:
                     candidates.append((u, v))
             
-            # 3. Smart Sort: "Least Tested First"
+            # Smart Sorting: preferentially test those connections which are least tested (i.e. test a few CZ twice, rather than testing a single one 3-4 times)
             # We shuffle first to break ties randomly (ensuring uniform distribution)
             random.shuffle(candidates)
             candidates.sort(key=lambda e: edge_counts[e])
             
-            # 4. Greedy Fill
+            # Greedy Fill
             for u, v in candidates:
                 # Re-check availability (since a previous candidate might have taken the spot)
                 if u not in busy_nodes and v not in busy_nodes:
@@ -224,13 +225,15 @@ class MisraGriesSolver:
 
         if max_degree > self.max_sets:
             raise ValueError("Graph degree exceeds maximum allowed sets.")
+        elif max_degree != self.max_sets:
+            print(f"Warning: Graph degree ({max_degree}) is less than max sets ({self.max_sets}). Using a maximum of {max_degree + 1} sets instead.")
 
         # Vizing's theorem guarantees solution with Delta + 1 colours
         max_colours = max_degree + 1
         print(f"Graph Degree: {max_degree}. Solving with max {max_colours} circuits.")
 
         for x, y in self.all_edges:
-            # 1. Find free colours for u (x) and v (y)
+            # Find free colours for u (x) and v (y)
             free_x = list(self.get_free_colours(x, max_colours))
             free_y = list(self.get_free_colours(y, max_colours))
             
@@ -245,7 +248,6 @@ class MisraGriesSolver:
             # Case 2: The Fan Argument (Misra & Gries)
             # If no common colour, we must swap.
             # For simplicity in this implementation, we use the standard "Kempe Swap" 
-            # which is the subroutine inside Vizing's proof.
             
             c_x = free_x[0]
             c_y = free_y[0]
@@ -265,7 +267,7 @@ class MisraGriesSolver:
                 if int(u) < int(v) and colour is not None:
                     sets[colour-1].add((u, v))
         
-        # Filter out empty sets (if graph was actually Class 1)
+        # Filter out empty sets
         return [s for s in sets if s]
     
 
@@ -304,5 +306,3 @@ def generate_circuits(raw_data, solver_class = MisraGriesSolver, max_sets=5, com
             raise RuntimeError(f'Critical: The solver failed to cover the full graph!\n{missing} are not covered.')
 
         return sets
-
-
