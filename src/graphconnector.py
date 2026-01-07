@@ -10,8 +10,159 @@ import random
 #     #...
 # }
 
+def verify_coverage(raw_data, final_sets):
+    """
+    Verifies that every connection in 'raw_data' appears at least once 
+    in 'final_sets'.
+    
+    Returns:
+        missing_edges (list): A list of edges that were NEVER tested.
+        coverage_stats (dict): Stats on how well the graph is covered.
+    """
+    # 1. Reconstruct the Truth (All expected unique edges)
+    expected_edges = set()
+    for u, neighbors in raw_data.items():
+        for v in neighbors:
+            # Normalize edge to (min, max) to handle undirected nature
+            u_int, v_int = int(u), int(v)
+            p1, p2 = min(u_int, v_int), max(u_int, v_int)
+            expected_edges.add((str(p1), str(p2)))
+            
+    # 2. Flatten the generated circuits into a single set of tested edges
+    tested_edges = set()
+    total_tests = 0
+    for s in final_sets:
+        for u, v in s:
+            u_int, v_int = int(u), int(v)
+            p1, p2 = min(u_int, v_int), max(u_int, v_int)
+            tested_edges.add((str(p1), str(p2)))
+            total_tests += 1
+
+    # 3. Find Diff
+    missing_edges = list(expected_edges - tested_edges)
+    
+    # 4. Reporting
+    circuit_count = len(final_sets)
+    total_expected = len(expected_edges)
+    unique_tested = len(tested_edges)
+    coverage_percent = (unique_tested / total_expected) * 100 if total_expected > 0 else 0.0
+    
+    print("-" * 40)
+    print(f"VERIFICATION REPORT")
+    print("-" * 40)
+    print(f"Total Number of Circuits:    {circuit_count}")
+    print(f"Total Unique Edges in Graph: {total_expected}")
+    print(f"Unique Edges Tested:         {unique_tested}")
+    print(f"Total Tests Performed:       {total_tests} (Avg {total_tests/total_expected:.2f}x redundancy)" if total_expected else "N/A")
+    print(f"Coverage:                    {coverage_percent:.1f}%")
+    
+    if missing_edges:
+        print(f"\n[FAIL] {len(missing_edges)} edges are MISSING:")
+        for edge in missing_edges:
+            print(f"  - Edge {edge}")
+    else:
+        print("\n[PASS] All connections tested at least once.")
+    print("-" * 40)
+
+    return missing_edges
+
+def compact_sets(sets):
+    """
+    Post-processing to maximize density in earlier sets.
+    Tries to move edges from Set 5 -> Set 1, Set 4 -> Set 2, etc.
+    """
+    # Flatten sets into a list of mutable sets
+    layers = [set(s) for s in sets]
+    num_layers = len(layers)
+
+    changed = True
+    while changed:
+        changed = False
+        # Iterate backwards: Try to empty the last set into the first set
+        for i in range(num_layers - 1, 0, -1):      # Source Layer (e.g., 4)
+            for j in range(i):                       # Target Layer (e.g., 0, 1, 2, 3)
+                
+                # Identify candidates to move from Layer i to Layer j
+                # An edge (u, v) can move to Layer j if neither u nor v are busy in Layer j
+                
+                # Build 'busy' map for target layer j for fast lookup
+                busy_nodes = {n for pair in layers[j] for n in pair}
+                
+                # Find moveable edges
+                movable = []
+                for u, v in layers[i]:
+                    if u not in busy_nodes and v not in busy_nodes:
+                        movable.append((u, v))
+                        # Update busy_nodes temporarily so we don't move conflicting edges at once
+                        busy_nodes.add(u)
+                        busy_nodes.add(v)
+                
+                # Perform moves
+                if movable:
+                    for edge in movable:
+                        layers[i].remove(edge)
+                        layers[j].add(edge)
+                    changed = True
+
+    # Remove empty sets from the end (if any were fully emptied)
+    return [s for s in layers if s]
+
+def fill_with_redundancy(all_edges, current_sets):
+        """
+        Fills empty slots in existing sets with redundant edges.
+        PRIORITY: Edges that have been tested the least so far.
+        """
+        # 1. Global Counter: How many times has each edge been tested?
+        edge_counts = collections.defaultdict(int)
+        for s in current_sets:
+            for edge in s:
+                edge_counts[edge] += 1
+        
+        # Ensure all edges are in the counter (even if count is 0, though it shouldn't be)
+        for edge in all_edges:
+            if edge not in edge_counts:
+                edge_counts[edge] = 0
+
+        # 2. Iterate through each set to fill 'holes'
+        for s in current_sets:
+            # Identify which qubits are currently busy in this circuit
+            busy_nodes = {n for u, v in s for n in (u, v)}
+            
+            # Find all valid candidates for this specific circuit
+            candidates = []
+            for u, v in all_edges:
+                # Rule 1: Edge must not already be in this specific circuit
+                if (u, v) in s:
+                    continue
+                
+                # Rule 2: Both Qubits must be free in this circuit
+                if u not in busy_nodes and v not in busy_nodes:
+                    candidates.append((u, v))
+            
+            # 3. Smart Sort: "Least Tested First"
+            # We shuffle first to break ties randomly (ensuring uniform distribution)
+            random.shuffle(candidates)
+            candidates.sort(key=lambda e: edge_counts[e])
+            
+            # 4. Greedy Fill
+            for u, v in candidates:
+                # Re-check availability (since a previous candidate might have taken the spot)
+                if u not in busy_nodes and v not in busy_nodes:
+                    s.add((u, v))
+                    
+                    # Mark nodes as busy for this circuit
+                    busy_nodes.add(u)
+                    busy_nodes.add(v)
+                    
+                    # Increment global count so next circuits favor other edges
+                    edge_counts[(u, v)] += 1
+                    
+        return current_sets
+
+
+
 class AdvancedGraphSolver:
-    def __init__(self, raw_data, max_sets=4):
+    def __init__(self, raw_data, max_sets=5):
         self.max_sets = max_sets
         self.adj = collections.defaultdict(dict) 
         self.all_edges = []
@@ -196,9 +347,9 @@ class AdvancedGraphSolver:
         return final_sets
 
 class MisraGriesSolver:
-    def __init__(self, raw_data, max_sets=4):
+    def __init__(self, raw_data, max_sets=5):
         self.adj = collections.defaultdict(dict)  # self.adj[u][v] = colour
-        self.edges_to_colour = []
+        self.all_edges = []
         self.max_sets = max_sets
         
         # --- Pre-processing ---
@@ -210,7 +361,7 @@ class MisraGriesSolver:
                 
                 # Store edge
                 if (p1, p2) not in seen:
-                    self.edges_to_colour.append((str(p1), str(p2)))
+                    self.all_edges.append((str(p1), str(p2)))
                     seen.add((p1, p2))
                 
                 # Initialize adj structure
@@ -255,7 +406,7 @@ class MisraGriesSolver:
     def solve(self):
         max_degree = 0
         for u in self.adj:
-            max_degree = max(max_degree, len(self.adj[u]))
+            max_degree = max(max_degree, len(self.adj[u]) - 1)  # Degree is number of edges
 
         if max_degree > self.max_sets:
             raise ValueError("Graph degree exceeds maximum allowed sets.")
@@ -264,7 +415,7 @@ class MisraGriesSolver:
         max_colours = max_degree + 1
         print(f"Graph Degree: {max_degree}. Solving with max {max_colours} circuits.")
 
-        for x, y in self.edges_to_colour:
+        for x, y in self.all_edges:
             # 1. Find free colours for u (x) and v (y)
             free_x = list(self.get_free_colours(x, max_colours))
             free_y = list(self.get_free_colours(y, max_colours))
@@ -304,8 +455,9 @@ class MisraGriesSolver:
         return [s for s in sets if s]
     
 
-# Increase recursion depth just in case, though small circuits won't hit this.
-sys.setrecursionlimit(5000)
+# Increase recursion depth
+# Only to be used on small QPUs due to performance.
+sys.setrecursionlimit(500000)
 
 class ExactGraphSolver:
     def __init__(self, raw_data, max_sets=4):
@@ -385,3 +537,42 @@ class ExactGraphSolver:
                 if int(u) < int(v):
                     sets[colour-1].add((u, v))
         return sets
+
+
+def generate_circuits(solver_class, raw_data, max_sets=5, compaction=True, redundancy=True):
+        """
+        Parameters:
+        - solver_class: A class reference to the solver to use (AdvancedGraphSolver, ExactGraphSolver, MisraGriesSolver).
+        - raw_data: The raw graph data in adjacency list format.
+        - max_sets: Maximum number of sets (circuits) to use.
+
+        Generates an optimal schedule using the specified solver class.
+        Steps:
+        1. Solve: Use the provided solver to get initial sets.
+        2. Compact: Rearrange sets to maximize early density.
+        3. Redundancy: Fill in gaps with least-tested edges.
+        4. Return final sets.
+
+        Returns:
+        final_sets: A list of sets representing the optimal schedule.
+        """
+        # Solver: 
+        solver = solver_class(raw_data, max_sets)
+        sets = solver.solve() 
+        
+        # Compaction: (Efficiency)
+        if compaction:
+            sets = compact_sets(sets)
+        
+        # Redundancy: Fill the circuit gaps with extra tests (Statistics)
+        if redundancy:
+            sets = fill_with_redundancy(solver.all_edges, sets)
+        
+        missing = verify_coverage(raw_data, sets)
+
+        if missing:
+            raise RuntimeError(f'Critical: The solver failed to cover the full graph!\n{missing} are not covered.')
+
+        return sets
+
+
