@@ -108,22 +108,30 @@ It is not a trivial problem to design an efficient circuit to test 2-qubit gates
 
 As this problem is equivalent to the maximal edge-colouring problem from graph theory, there are many algorithms which have been developed to efficiently generate solutions to this exact problem, 'colouring' each connection at least once, and if possible, multiple times. Using graph theory, we can also say that since the qubits are arranged on a grid, it is a bipartite graph, and thus by König's Theorem it is class 1, and only 4 circuits (and not 5) are required (for this idea, see Vizing's Theorem).
 
-**The** `graphconnector.py` **script and its `AdvancedGraphSolver` class is an implementation using Kempe Chains and graph reordering to produce valid data aand maximise data quality and efficiency.**
+**The** `graphconnector.py` **script and its `MisraGriesSolver` class is an implementation using Kempe Chains in the Misra-Gries algorithm and graph reordering to produce valid data aand maximise data quality and efficiency.**
 
+We use the Misra-Gries Edge-Colouring Algorithm, which is efficient of order $\mathcal{O}(N \times E) \equiv \mathcal{O}(N ^ 2)$, of order 'N' number of qubits multiply 'E' number of edges (here qubit coupling). This will be very efficient for NISQ QPUs, and can be improved if the number of circuits can be increased from 4 to 5, or shots become less expensive, wherein finding these graphs becomes easier. 
+
+We here minimise the number of circuits to 4 (which will be either 4 or 5 in a grid-like construction as in current superconducting QPUs), and add in redundant extra CZ tests to infer the gate error even better with limited shots.
+
+Below are 2-qubit CZ testing circuit examples from IQM Emerald and Rigetti Ankaa-3. Each have 4 circuits, with red edges being active CZ gates in the circuit, to be run some number of times to determine bit-flip error. An 'Efficiency' is given in the top left of each circuit, which gives the proportion of qubits active in a CZ gate, thus from whom error data can be gathered. Additional statistics concerning the graphs, total CZ gates tested, redundnacy, and time taken to produce them are given in the Ankaa-3 graphs:
+
+##### **IQM Garnet:**
 | | |
 |:---:|:---:|
 | <img src="resources/Emerald0.png" width="400" /> | <img src="resources/Emerald1.png" width="400" /> |
 | <img src="resources/Emerald2.png" width="400" /> | <img src="resources/Emerald3.png" width="400" /> |
-
+##### **Rigetti Ankaa-3:**
 | | |
 |:---:|:---:|
 | <img src="resources/Ankaa-3_0.png" width="400" /> | <img src="resources/Ankaa-3_1.png" width="400" /> |
 | <img src="resources/Ankaa-3_2.png" width="400" /> | <img src="resources/Ankaa-3_3.png" width="400" /> |
-
+##### **Rigetti Ankaa-3 Text Statistics Readout:**
 | |
 |:---:|
 | <img src="resources/Ankaa-3Text.png" width="400" /> |
 
+The notebook containing the code to produce these graphs from the AWS Braket on 7 Jan 2026 can be found in `Tutorial/Producing2QubitGraphs.ipynb`
 
 #### 2b. Inference 
 
