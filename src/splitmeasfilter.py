@@ -623,6 +623,14 @@ class SplitMeasFilter:
         if has_0 and has_1:
             self.create_filter_mat()
 
+
+        if self.post_marginals[first_q]['0'].size > 0 and self.post_marginals[first_q]['1'].size > 0:
+            self.post = {f'{q}': {'e0_mean': float(np.mean(self.post_marginals[f'Qubit{q}']['0'])), 'e1_mean': float(np.mean(self.post_marginals[f'Qubit{q}']['1'])),
+                                       'e0_mode': float(ss.mode(self.post_marginals[f'Qubit{q}']['0'])[0]), 'e1_mode': float(ss.mode(self.post_marginals[f'Qubit{q}']['1'])[0]),
+                                       } for q in self.qubit_order}
+            print("Inference Complete. ")
+            self.error_distributions(plotting=True, save_plots=True, num_points=num_points)
+
     def create_filter_mat(self):
         self.inv_matrices_mean = []
         self.inv_matrices_mode = []
@@ -925,7 +933,7 @@ class SplitMeasFilter:
         return final_data
         
 
-    def error_distributions(self, plotting=True, save_plots=False):
+    def error_distributions(self, plotting=True, save_plots=False, num_points=32):
             """
             Calculates statistics and (optionally) plots the posterior distribution 
             of measurement errors for each qubit.
@@ -967,35 +975,31 @@ class SplitMeasFilter:
                 # 4. Plotting (KDE + Histogram)
                 if plotting:
                     plt.figure(figsize=(8, 5), dpi=100)
-                    
+                    xs = np.linspace(0, 0.05, 1000)
                     # Plot Error 0 (Readout error on |0>)
                     kde0 = ss.gaussian_kde(err0_samples)
-                    x0 = np.linspace(min(err0_samples), max(err0_samples), 200)
-                    plt.plot(x0, kde0(x0), color='blue', label=r'$P(1|0)$ (Error on 0)')
-                    plt.fill_between(x0, kde0(x0), alpha=0.2, color='blue')
+                    plt.plot(xs, kde0(xs), color='blue', label=r'$P(1|0)$ (Error on 0)')
+                    plt.fill_between(xs, kde0(xs), alpha=0.2, color='blue')
 
                     # Plot Data KDE for comparison
-                    d0 = getData0(self.data.get('0', np.array([])), 100, q)
+                    d0 = getData0(self.data.get('0', np.array([])), num_points, q)
                     if len(d0) > 0:
                         d0_ker = ss.gaussian_kde(d0)
-                        x0_d = np.linspace(1 - max(err0_samples), 1, 200)
-                        plt.plot(1 - x0_d, d0_ker(x0_d), color='green', linestyle='--', label='Data KDE (State |0>)')
-                        plt.fill_between(1 - x0_d, d0_ker(x0_d), alpha=0.1, color='green')
+                        plt.plot(xs, d0_ker(1 - xs), color='darkslateblue', linestyle='--', label='Data KDE (State |0>)')
+                        plt.fill_between(xs, d0_ker(1 - xs), alpha=0.1, color='darkslateblue')
 
                     # Plot Error 1 (Readout error on |1>)
                     kde1 = ss.gaussian_kde(err1_samples)
-                    x1 = np.linspace(min(err1_samples), max(err1_samples), 200)
-                    plt.plot(x1, kde1(x1), color='red', label=r'$P(0|1)$ (Error on 1)')
-                    plt.fill_between(x1, kde1(x1), alpha=0.2, color='red')
+                    plt.plot(xs, kde1(xs), color='red', label=r'$P(0|1)$ (Error on 1)')
+                    plt.fill_between(xs, kde1(xs), alpha=0.2, color='red')
 
                     # Plot Data KDE for comparison
-                    d1 = getData0(self.data.get('1', np.array([])), 100, q)
+                    d1 = getData0(self.data.get('1', np.array([])), num_points, q)
                     if len(d1) > 0:
                         d1_ker = ss.gaussian_kde(d1)
-                        x1_d = np.linspace(0, max(err1_samples), 200)
-                        plt.plot(x1_d, d1_ker(x1_d), color='orange', linestyle='--', label='Data KDE (State |1>)')
-                        plt.fill_between(x1_d, d1_ker(x1_d), alpha=0.1, color='orange')
-                    
+                        plt.plot(xs, d1_ker(xs), color='firebrick', linestyle='--', label='Data KDE (State |1>)')
+                        plt.fill_between(xs, d1_ker(xs), alpha=0.1, color='firebrick')
+
                     plt.title(f'Posterior Error Distributions - Qubit {q}')
                     plt.xlabel('Error Rate')
                     plt.ylabel('Density')
