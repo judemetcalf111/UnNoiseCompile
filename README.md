@@ -204,9 +204,9 @@ plt.show()
 
 ### Denoising
 
-It is difficult and often intractable to denoise using the gate bitflip errors, the best method would be to compile the least noisy gates, to minimise errors. 
+It is difficult and often intractable to denoise using the gate bitflip errors, the best method would be to compile qubits to utilise their least noisy connections, and gates, thus minimising errors. 
 
-However, an efficient denoiser of **measurement error** in polynomial time is possible is here developed for use of cleaning quantum bitstring outputs to better estimate the final quantum state. To denoise, run:
+However, a kind of efficient denoiser of **measurement error** in polynomial time is possible, by assuming that measurement error is not correlated (thus, ignoring cross-talk). Such a method is here developed for use of denoising quantum bitstring outputs to better estimate the final quantum state. To denoise a given dictionary of bitstring counts, infer the measurement error rates using the SplitMeasFilter class along with gathered data, and  run the following:
 
 ```python
 from src.splitmeasfilter import SplitMeasFilter
@@ -222,7 +222,7 @@ data_example = {
     "111": 1,
 }
 
-# Here the eff_DeNoise() will take a dictionary of bitstrings and counts, as with `data_example` and return denoised data dict
+# Here the eff_DeNoise() will take a dictionary of bitstrings and their counts, as with `data_example`, and return a denoised data dictionary
 # `verbose` gives continual confirmation, GD gives an overkill gradient descent error mitigation technique,
 # with lr the learning rate, and max_iter giving the maximum GD iterations
 denoised_date = meas_filter.eff_DeNoise(datadict=data_example, percentage=100, verbose=True, GD = False, lr=0.1, max_iter=50)
