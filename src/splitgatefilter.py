@@ -319,7 +319,7 @@ class SplitGateFilter:
             if gate_type in ['iSWAP','CZ']:
                 print(f"Gate Type: {gate_type}.\nNote: For two-qubit gates, gate errors are inferred per qubit assuming symmetric error model.\n" \
                 "Qubit couplings must be provided in the `qubit_couplings` argument as a list of sets of connected qubit pairs.\n" \
-                "The `qubit_order` must still be provided as the order of measurement.\n"
+                "The `qubit_order` must still be provided as the order of measurement.\n")
             else:  
                 raise Exception(f"Gate Type {gate_type} not recognised, recognised gates are: ['X', 'RY', 'RZ', 'CZ', 'RX', 'iSWAP', 'CZ']")
             coupling_pairs = [pair for coupling_set in self.qubit_couplings 
