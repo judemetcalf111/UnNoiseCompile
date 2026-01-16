@@ -12,6 +12,7 @@ import numpy as np
 import json
 import scipy.stats as ss
 import numpy.linalg as nl
+from collections import defaultdict
 # For optimization
 from cvxopt import matrix, solvers
 
@@ -264,7 +265,7 @@ def plotComparsion(data, post_lambdas, q, file_address=''):
 class SplitGateFilter:
     """ Gate and Measurement error filter.
     Attributes:
-        interested_qubits: array,
+        qubit_order: array,
           qubit indices that experiments are applied on.
         gate_type : String
             Chosen between "X", "Y", and "Z". 
@@ -292,34 +293,70 @@ class SplitGateFilter:
           
     """
     def __init__(self,
-                 interested_qubits,
+                 qubit_order,
                  gate_num,
                  gate_type,
                  home_dir='./',
+                 qubit_couplings=[],
                  meas_cal_dir=None,
                  data_file_address='./data/'):
         self.home_dir = home_dir
         os.chdir(home_dir)
         self.meas_cal_dir = meas_cal_dir if meas_cal_dir else home_dir
         self.data_file_address = data_file_address
-        self.interested_qubits = interested_qubits
+        self.qubit_order = qubit_order
+        self.qubit_couplings = qubit_couplings
         self.gate_type = gate_type
         self.gate_num = gate_num
         self.params = None
-        self.post = {}
         self.modes = None
         self.means = None
+        self.post_full = {}
+        self.post = {}
+
+
+        if gate_type not in ['X', 'RY', 'RZ', 'CZ', 'RX']:
+            if gate_type in ['iSWAP','CZ']:
+                print(f"Gate Type: {gate_type}.\nNote: For two-qubit gates, gate errors are inferred per qubit assuming symmetric error model.\n" \
+                "Qubit couplings must be provided in the `qubit_couplings` argument as a list of sets of connected qubit pairs.\n" \
+                "The `qubit_order` must still be provided as the order of measurement.\n"
+            else:  
+                raise Exception(f"Gate Type {gate_type} not recognised, recognised gates are: ['X', 'RY', 'RZ', 'CZ', 'RX', 'iSWAP', 'CZ']")
+            coupling_pairs = [pair for coupling_set in self.qubit_couplings 
+                                for pair in self.qubit_couplings[coupling_set]]
+            coupling_qubit_set = set(q for pair in coupling_pairs 
+                                for q in [pair[0], pair[1]])
+            
+            final_json = Path(os.path.join(self.data_file_address, 'Post_Full.json'))
+
+            if final_json.is_file():
+                with open(final_json, 'r') as f:
+                    self.post_full = json.load(f)
+                for q in qubit_order:
+                    if f'Qubit{q}' not in coupling_qubit_set:
+                        raise Exception(f"Qubit {q} not found in qubit_couplings dictionary.")
+                    
+                    q_couplings = [pair for pair in coupling_pairs if str(q) in [pair[0], pair[1]]]
+                    for q_pair in q_couplings:
+                        if not self.post_full[f'Qubit{q}'][str(gate_type)][q_pair]:
+                            raise Exception(f"Coupling {q_pair} for Qubit {q} not found in loaded posteriors.\nQPU geometries may have changed, and must match those used during measurement calibration.")
+
+                self.post = {f'{q}': {'e0_mean': float(np.mean(self.post_full[f'Qubit{q}'][str(gate_type)]['0'])), 'e1_mean': float(np.mean(self.post_full[f'Qubit{q}'][str(gate_type)]['1'])),
+                                        'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}'][str(gate_type)]['0'])[0]), 'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}'][str(gate_type)]['1'])[0]),
+                                        } for q in qubit_order}
+
+
 
     def mean(self):
         res = {}
-        for q in self.interested_qubits:
+        for q in self.qubit_order:
             res['Qubit' + str(q)] = closest_average(self.post['Qubit' +
                                                               str(q)])
         return res
 
     def mode(self):
         res = {}
-        for q in self.interested_qubits:
+        for q in self.qubit_order:
             res['Qubit' + str(q)] = closest_mode(self.post['Qubit' + str(q)])
         return res
     
@@ -405,7 +442,7 @@ class SplitGateFilter:
              pass 
 
         # Main Loop over Qubits
-        for q in self.interested_qubits:
+        for q in self.qubit_order:
             print(f'--- Inferring Gate Errors for Qubit {q} ---')
             
             # Load Observed Data
@@ -473,7 +510,7 @@ class SplitGateFilter:
             self.post['Qubit' + str(q)] = post_lambdas
             
             # Save to CSV (Compatible with existing format)
-            filename = f"{self.data_file_address}Gate_Post_Qubit{q}.csv"
+            filename = f"{self.data_file_address}Gate_Post_Qubit{q}_{self.gate_type}_{qubit_couple}.csv"
             np.savetxt(filename, post_lambdas, delimiter=',')
             print(f"-> Saved {len(post_lambdas)} posterior samples to {filename}")
 
@@ -511,7 +548,7 @@ class SplitGateFilter:
                     (ss.entropy(d_ker(xs), post_ker(xs))))
 
 
-                output_filename = f"{self.data_file_address}Gate_Post_Qubit{q}.csv"
+                output_filename = f"{self.data_file_address}Gate_Post_Qubit{q}_{self.gate_type}_{qubit_couple}.csv"
                 np.savetxt(output_filename, post_lambdas, delimiter=",")
 
                 # Defining matplotlib width and height here as in the preamble for clarity
@@ -553,10 +590,79 @@ class SplitGateFilter:
         None.
 
         """
-        for i in self.interested_qubits:
+        for i in self.qubit_order:
             post_lambdas = pd.read_csv(self.data_file_address +
-                                       'Gate_Post_Qubit{}.csv'.format(i),
+                                       f'Gate_Post_Qubit{i}_{self.gate_type}_{qubit_couple}.csv',
                                        header=None).to_numpy()
             self.post['Qubit' + str(i)] = post_lambdas
         self.modes = self.mode()
         self.means = self.mean()
+
+
+    import os
+    import json
+
+    def load_qubit_couplings(self):
+        # 1. Check if file exists
+        if not os.path.exists(self.data_file_address):
+            print(f"File not found: {self.data_file_address}")
+            return {}
+
+        # 2. Load the raw data
+        try:
+            with open(file_path, 'r') as f:
+                raw_data = json.load(f)
+        except json.JSONDecodeError:
+            print("Error decoding JSON.")
+            return {}
+
+        # The structure we want to build
+        # Format: { "Qubit0": { "0-1": 0.95, "0-2": 0.99 } }
+        nested_couplings = {}
+
+        # 3. Iterate and Filter
+        for entry in raw_data:
+            # Assuming the file is a list of connections like:
+            # [{"source": "Qubit0", "target": "Qubit1", "coupling": 0.95}, ...]
+            
+            source = entry.get("source") # e.g., "Qubit0"
+            target = entry.get("target") # e.g., "Qubit1"
+            value = entry.get("coupling")
+            
+            # Check if this entry is for the qubit we want
+            if source == target_qubit_name:
+                
+                # Initialize the nested dict if it doesn't exist yet
+                if source not in nested_couplings:
+                    nested_couplings[source] = {}
+                
+                # Create the pair string ID (e.g., "0-1")
+                # Assuming "Qubit0" -> id "0", "Qubit1" -> id "1"
+                source_id = source.replace("Qubit", "")
+                target_id = target.replace("Qubit", "")
+                pair_key = f"{source_id}-{target_id}"
+                
+                # Assign the value
+                nested_couplings[source][pair_key] = value
+
+        return nested_couplings
+
+    # --- Usage Example ---
+
+    # 1. Let's create a dummy file to test it
+    dummy_data = [
+        {"source": "Qubit0", "target": "Qubit1", "coupling": 0.95},
+        {"source": "Qubit0", "target": "Qubit2", "coupling": 0.99},
+        {"source": "Qubit0", "target": "Qubit4", "coupling": 0.80},
+        {"source": "Qubit1", "target": "Qubit2", "coupling": 0.12}, # Should be ignored
+    ]
+
+    with open("qubit_data.json", "w") as f:
+        json.dump(dummy_data, f)
+
+    # 2. Run the loader
+    target = "Qubit0"
+    result = load_qubit_couplings("qubit_data.json", target)
+
+    # 3. Output
+    print(json.dumps(result, indent=4))
