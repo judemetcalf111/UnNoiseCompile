@@ -4,6 +4,8 @@ Created on Wed Dec 31 13:18:38 2025
 
 @author: Jude L. Metcalf
 """
+from datetime import datetime
+import json
 import os
 import csv
 from pathlib import Path
@@ -192,7 +194,7 @@ def dict_filter(data_dict: dict, percent: float = 99.0) -> dict:
             break
     return filtered_dict
 
-def getData0(data, num_group, interested_qubit):
+def getData0(data, num_group, interested_qubit_index):
     """ Get the probabilities of measuring 0 from binary readouts
         **Binary number follows little-endian convention**
 
@@ -203,7 +205,7 @@ def getData0(data, num_group, interested_qubit):
     num_group : int
         Number of groups to split the data into for probability calculation.
         Data length must be divisible by num_group.
-    interested_qubit : int
+    interested_qubit_index : int
         The index of the qubit to analyze (0-indexed).
 
     Returns
@@ -221,7 +223,7 @@ def getData0(data, num_group, interested_qubit):
     # Determine index for interested qubit (Little Endian)
     # If string is '00', Qubit 0 is at index 1 (end), Qubit 1 at index 0.
     str_len = len(data_list[0])
-    target_idx = str_len - 1 - interested_qubit
+    target_idx = interested_qubit_index
     
     # Fallback if qubit index out of bounds
     if target_idx < 0: target_idx = 0 
@@ -428,7 +430,7 @@ class SplitMeasFilter:
 
     Attributes:
         qubit_order: array,
-          using order[LastQubit, ..., FirstQubit].
+          using order given by the Braket [q0, q1, ...].
         data: bit string array,
           Has to be bit string array from circuit of all hadamard gates, leave as [] if data is saved already
         file_address: string
@@ -462,7 +464,7 @@ class SplitMeasFilter:
         self.qubit_order = qubit_order
         
         self.prior = {}
-        self.post_marginals = {f'Qubit{q}': {'0': np.array([]), '1': np.array([])} for q in qubit_order}
+        self.post_full = {f'Qubit{q}': {'0': np.array([]), '1': np.array([])} for q in qubit_order}
         posterior0path = Path(os.path.join(self.file_address, 'State0_Post_Qubit' + str(self.qubit_order[0]) + '.csv'))
         posterior1path = Path(os.path.join(self.file_address, 'State1_Post_Qubit' + str(self.qubit_order[0]) + '.csv'))
         if (posterior0path.is_file() and posterior1path.is_file()):
@@ -470,10 +472,10 @@ class SplitMeasFilter:
         self.params = None if device is None else get_braket_calibration_dict(device, n_qubits=len(qubit_order))
         self.inv_matrices_mean = []
         self.inv_matrices_mode = []
-        if self.post_marginals[f'Qubit{self.qubit_order[0]}']['0'].size > 0 and self.post_marginals[f'Qubit{self.qubit_order[0]}']['1'].size > 0:
+        if self.post_full[f'Qubit{self.qubit_order[0]}']['0'].size > 0 and self.post_full[f'Qubit{self.qubit_order[0]}']['1'].size > 0:
             self.create_filter_mat()
-            self.post = {f'{q}': {'e0_mean': float(np.mean(self.post_marginals[f'Qubit{q}']['0'])), 'e1_mean': float(np.mean(self.post_marginals[f'Qubit{q}']['1'])),
-                                       'e0_mode': float(ss.mode(self.post_marginals[f'Qubit{q}']['0'])[0]), 'e1_mode': float(ss.mode(self.post_marginals[f'Qubit{q}']['1'])[0]),
+            self.post = {f'{q}': {'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
+                                       'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]),
                                        } for q in qubit_order}
         
 
@@ -491,8 +493,8 @@ class SplitMeasFilter:
             for q in self.qubit_order:
                 path = os.path.join(self.file_address, f'State{prep_state}_Post_Qubit{q}.csv')
                 try:
-                    self.post_marginals[f'Qubit{q}'][prep_state] = pd.read_csv(path, header=None, dtype=float).values.flatten()
-                    print(f"Loaded {len(self.post_marginals[f'Qubit{q}'][prep_state])} Posterior Values for Qubit {q}, State {prep_state}.")
+                    self.post_full[f'Qubit{q}'][prep_state] = pd.read_csv(path, header=None, dtype=float).values.flatten()
+                    print(f"Loaded {len(self.post_full[f'Qubit{q}'][prep_state])} Posterior Values for Qubit {q}, State {prep_state}.")
                 except Exception as e:
                     print(f"Error reading {path}: {e}")
 
@@ -589,46 +591,58 @@ class SplitMeasFilter:
                 self.params[q] = {'pm1p0': 0.005, 'pm0p1': 0.005}
 
         # Inference Loop
-        for i in self.qubit_order:
-            print(f'Inferring Qubit {i} for State |{prep_state}>')
+        for idx,q in enumerate(self.qubit_order):                       # The qubit array order giving the index is given by the aws bracket as `task.result().measurement_qubits`
+            print(f'Inferring Qubit {idx} for State |{prep_state}>')
             
             try:
-                d = getData0(valid_data, num_points, i)
+                d = getData0(valid_data, num_points, idx)
             except Exception as e:
                 print(f"   Error in getData0: {e}")
                 continue
 
             if len(d) < 5:
-                print(f"   Error: Resulting dataset too small (len={len(d)}). Skipping Qubit {i}.")
+                print(f"   Error: Resulting dataset too small (len={len(d)}). Skipping Qubit {idx}.")
                 continue
 
             state_prefix = self.file_address + f"State{prep_state}_"
             
             try:
                 prior_lambdas, post_lambdas = output(
-                    d, i, nPrior, self.params, prior_sd, 
+                    d, idx, nPrior, self.params, prior_sd, 
                     seed=seed, file_address=state_prefix, prep_state=prep_state
                 )
                 
-                self.prior[f'Qubit{i}'] = prior_lambdas
-                self.post_marginals[f'Qubit{i}'][prep_state] = post_lambdas
+                self.prior[f'Qubit{q}'] = prior_lambdas
+                self.post_full[f'Qubit{q}'][prep_state] = post_lambdas
             except Exception as e:
-                print(f"   Inference failed for Qubit {i}: {e}")
+                print(f"   Inference failed for Qubit {q}: {e}")
                 
         # Matrix Creation (Safe Check)
         first_q = f'Qubit{self.qubit_order[0]}'
-        has_0 = len(self.post_marginals[first_q]['0']) > 0
-        has_1 = len(self.post_marginals[first_q]['1']) > 0
+        has_0 = len(self.post_full[first_q]['0']) > 0
+        has_1 = len(self.post_full[first_q]['1']) > 0
         
         if has_0 and has_1:
             self.create_filter_mat()
 
 
-        if self.post_marginals[first_q]['0'].size > 0 and self.post_marginals[first_q]['1'].size > 0:
-            self.post = {f'{q}': {'e0_mean': float(np.mean(self.post_marginals[f'Qubit{q}']['0'])), 'e1_mean': float(np.mean(self.post_marginals[f'Qubit{q}']['1'])),
-                                       'e0_mode': float(ss.mode(self.post_marginals[f'Qubit{q}']['0'])[0]), 'e1_mode': float(ss.mode(self.post_marginals[f'Qubit{q}']['1'])[0]),
+        if self.post_full[first_q]['0'].size > 0 and self.post_full[first_q]['1'].size > 0:
+            self.post = {f'{q}': {'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
+                                       'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]),
                                        } for q in self.qubit_order}
-            print("Inference Complete. ")
+            print("Inference Complete, Saving Results...")
+
+            full_path = os.path.join(self.file_address, f'Post_Full_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
+            meanmode_path = os.path.join(self.file_address, f'Post_MeanMode_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
+
+            with open(full_path, 'w', newline='') as f:
+                json.dump(self.post_full, f)
+
+            with open(meanmode_path, 'w', newline='') as f:
+                json.dump(self.post, f)
+            
+            print(f"Saved Full Posterior to {full_path}")
+            print(f"Saved Mean/Mode Summary to {meanmode_path}")
             self.error_distributions(plotting=True, save_plots=True, num_points=num_points)
 
     def create_filter_mat(self):
@@ -637,8 +651,8 @@ class SplitMeasFilter:
 
         for q in self.qubit_order:
             q_key = f'Qubit{q}'
-            res_0 = self.post_marginals[q_key]['0']
-            res_1 = self.post_marginals[q_key]['1']
+            res_0 = self.post_full[q_key]['0']
+            res_1 = self.post_full[q_key]['1']
             
             # Check for empty data before calculating mean
             if len(res_0) == 0 or len(res_1) == 0:
@@ -669,8 +683,8 @@ class SplitMeasFilter:
         res = {}
         for q in self.qubit_order:
             q_key = f'Qubit{q}'
-            m0 = safe_mean(self.post_marginals[q_key]['0'])
-            m1 = safe_mean(self.post_marginals[q_key]['1'])
+            m0 = safe_mean(self.post_full[q_key]['0'])
+            m1 = safe_mean(self.post_full[q_key]['1'])
             res[q_key] = np.array([m0, m1])
         return res    
     
@@ -764,7 +778,7 @@ class SplitMeasFilter:
         Very similar to get_inverse_element, but uses the forward error model.
         """
         # Ensure marginals are available
-        if not hasattr(self, 'post_marginals'):
+        if not hasattr(self, 'post_full'):
             raise RuntimeError("Filter not calibrated. Run inference() first.")
 
         prob = 1.0
@@ -777,9 +791,9 @@ class SplitMeasFilter:
             
             # Retrieve single-qubit error rates from calibration
             # P(Meas 0 | Prep 0) = Mean of Post Lambda 0
-            p0_g_0 = safe_mean(self.post_marginals[q_key]['0'])
+            p0_g_0 = safe_mean(self.post_full[q_key]['0'])
             # P(Meas 1 | Prep 1) = Mean of Post Lambda 1
-            p1_g_1 = safe_mean(self.post_marginals[q_key]['1'])
+            p1_g_1 = safe_mean(self.post_full[q_key]['1'])
             
             # Build the 2x2 Forward Error Matrix for this qubit
             # M = [[P(0|0), P(0|1)], 
@@ -949,8 +963,8 @@ class SplitMeasFilter:
                 
                 # 1. Retrieve Success Rates (Lambdas)
                 # These are samples of "Probability of measuring Correctly"
-                lam0_samples = self.post_marginals[q_key]['0']
-                lam1_samples = self.post_marginals[q_key]['1']
+                lam0_samples = self.post_full[q_key]['0']
+                lam1_samples = self.post_full[q_key]['1']
                 
                 if lam0_samples is None or lam1_samples is None:
                     print(f"Skipping Qubit {q}: Inference not complete.")
