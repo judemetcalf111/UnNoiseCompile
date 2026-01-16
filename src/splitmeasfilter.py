@@ -5,6 +5,7 @@ Created on Wed Dec 31 13:18:38 2025
 @author: Jude L. Metcalf
 """
 from datetime import datetime
+import glob
 import json
 import os
 import csv
@@ -74,6 +75,16 @@ def get_braket_calibration_dict(device_arn, n_qubits=None):
 
 
 # --- Helper Functions ---
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.floating):
+            return float(o)
+        return super(NumpyEncoder, self).default(o)
 
 def tnorm01(center, sd, size=1):
     """ Generate random numbers for truncated normal with range [0,1]
@@ -452,7 +463,7 @@ class SplitMeasFilter:
           Not None after execute inference()
           
     """
-    def __init__(self, qubit_order, home_dir=None, data=None, file_address='data/', device=None):
+    def __init__(self, qubit_order, load_data=True, home_dir=None, data=None, file_address='data/', device=None):
         if home_dir:
             self.home_dir = home_dir
             try:
@@ -465,19 +476,40 @@ class SplitMeasFilter:
         
         self.prior = {}
         self.post_full = {f'Qubit{q}': {'0': np.array([]), '1': np.array([])} for q in qubit_order}
-        posterior0path = Path(os.path.join(self.file_address, 'State0_Post_Qubit' + str(self.qubit_order[0]) + '.csv'))
-        posterior1path = Path(os.path.join(self.file_address, 'State1_Post_Qubit' + str(self.qubit_order[0]) + '.csv'))
-        if (posterior0path.is_file() and posterior1path.is_file()):
-            self._load_posterior_marginals()
+        full_post_path = Path(os.path.join(self.file_address, 'Post_Full_Current.json'))
+        
+        if full_post_path.is_file() and load_data == True:
+            print(f"Loading historical data from {full_post_path}...")
+            try:
+                with open(full_post_path, 'r') as f:
+                    loaded_data = json.load(f)
+                
+                # RECONSTRUCT NUMPY ARRAYS
+                # JSON loads lists, but code expects numpy arrays (e.g. for .size or .mean)
+                for q_key, states in loaded_data.items():
+                    if q_key in self.post_full:
+                        self.post_full[q_key]['0'] = np.array(states['0'])
+                        self.post_full[q_key]['1'] = np.array(states['1'])
+            except Exception as exc:
+                print(f"Failed to load JSON data: {exc}")
+
+        # Device calibration loading
         self.params = None if device is None else get_braket_calibration_dict(device, n_qubits=len(qubit_order))
         self.inv_matrices_mean = []
         self.inv_matrices_mode = []
-        if self.post_full[f'Qubit{self.qubit_order[0]}']['0'].size > 0 and self.post_full[f'Qubit{self.qubit_order[0]}']['1'].size > 0:
-            self.create_filter_mat()
-            self.post = {f'{q}': {'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
-                                       'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]),
-                                       } for q in qubit_order}
-        
+
+        # Check if data was loaded successfully (checks the first qubit's size)
+        first_q = f'Qubit{self.qubit_order[0]}'
+        if self.post_full[first_q]['0'].size > 0 and self.post_full[first_q]['1'].size > 0:
+            self.create_filter_mat() 
+            
+            # Recalculate Mean/Mode from the loaded full data
+            self.post = {f'{q}': {
+                'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 
+                'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
+                'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 
+                'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]),
+            } for q in qubit_order}
 
         self.data = {'0': np.array([]), '1': np.array([])}
         if data is not None:
@@ -486,7 +518,8 @@ class SplitMeasFilter:
             else:
                 self.data['0'] = np.atleast_1d(data)
         else:
-            self._load_data_from_files()
+            self._load_data_from_files() 
+            pass
 
     def _load_posterior_marginals(self):
         for prep_state in ['0', '1']:
@@ -627,22 +660,38 @@ class SplitMeasFilter:
 
 
         if self.post_full[first_q]['0'].size > 0 and self.post_full[first_q]['1'].size > 0:
-            self.post = {f'{q}': {'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
-                                       'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]),
-                                       } for q in self.qubit_order}
+            # Calculate stats
+            self.post = {f'{q}': {
+                'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 
+                'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
+                'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 
+                'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]),
+            } for q in self.qubit_order}
+            
             print("Inference Complete, Saving Results...")
 
-            full_path = os.path.join(self.file_address, f'Post_Full_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
-            meanmode_path = os.path.join(self.file_address, f'Post_MeanMode_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
+            # Update extensions to .json
+            full_path_datetime = os.path.join(self.file_address, f'Post_Full_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+            full_path_current = os.path.join(self.file_address, 'Post_Full_Current.json')
+            meanmode_path_datetime = os.path.join(self.file_address, f'Post_MeanMode_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+            meanmode_path_current = os.path.join(self.file_address, 'Post_MeanMode_Current.json')
 
-            with open(full_path, 'w', newline='') as f:
-                json.dump(self.post_full, f)
+            # Save using the NumpyEncoder
+            with open(full_path_datetime, 'w') as f:
+                json.dump(self.post_full, f, cls=NumpyEncoder)
 
-            with open(meanmode_path, 'w', newline='') as f:
-                json.dump(self.post, f)
+            with open(meanmode_path_datetime, 'w') as f:
+                json.dump(self.post, f, cls=NumpyEncoder)
+
+            with open(full_path_current, 'w') as f:
+                json.dump(self.post_full, f, cls=NumpyEncoder)
+
+            with open(meanmode_path_current, 'w') as f:
+                json.dump(self.post, f, cls=NumpyEncoder)
+
+            print(f"Saved Full Posterior to:\n{full_path_datetime}\nand\n{full_path_current}")
+            print(f"Saved Mean/Mode Summary to:\n{meanmode_path_datetime}\nand\n{meanmode_path_current}")
             
-            print(f"Saved Full Posterior to {full_path}")
-            print(f"Saved Mean/Mode Summary to {meanmode_path}")
             self.error_distributions(plotting=True, save_plots=True, num_points=num_points)
 
     def create_filter_mat(self):
