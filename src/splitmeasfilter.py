@@ -247,9 +247,9 @@ def getData0(data, num_group, interested_qubit_index):
     grouped = arr.reshape(num_group, -1)
     
     # Calculate mean (probability of being 0)
-    sum_of_entries = grouped.mean(axis=1)
+    mean_of_entries = grouped.mean(axis=1)
 
-    prob0 = 1 - sum_of_entries
+    prob0 = 1 - mean_of_entries
     
     return prob0
 
@@ -472,7 +472,7 @@ class SplitMeasFilter:
             # Fallback: Return original priors if we can't update them
             return success_rates, success_rates
 
-        print(f'Given Lambda |{prep_state}>: success rate = {prior_mean:.4f}')
+        print(f'Given Lambda |{prep_state}>: prior success rate = {prior_mean:.4f}')
 
         # Optimization
         max_r, max_q = findM(qs_ker, d_ker, prep_state)
