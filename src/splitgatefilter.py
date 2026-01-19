@@ -178,17 +178,10 @@ def data_readout(qubit, datafile: str = '', data: np.ndarray = np.array([])):
         with open(str(datafile), 'r') as file:
             data = json.load(file)
         qubit_props = data['oneQubitProperties']
-        num_qubits = len(qubit_props)
-
-        epsilon01 = np.zeros(num_qubits)
-        epsilon10 = np.zeros(num_qubits)
-        gate_epsilon = np.zeros(num_qubits)
-
-        qub = qubit_props[qubit]
         
-        epsilon01 = qubit_props[qub]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
-        epsilon10 = qubit_props[qub]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
-        gate_epsilon = qubit_props[qub]['oneQubitFidelity'][0]['fidelity']
+        epsilon01 = qubit_props[str(qubit)]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+        epsilon10 = qubit_props[str(qubit)]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+        gate_epsilon = qubit_props[str(qubit)]['oneQubitFidelity'][0]['fidelity']
 
     elif not (datafile or data):
         raise Exception("Error: No data or datafile provided for the `data_readout()`")
@@ -509,14 +502,10 @@ class SplitGateFilter:
                 # We always generate this using the calibration data as an uncertain prior
                 # Retrieve calibration center (i.e. mean) using existing data_readout()
                 try:
-                    if type(interested_circuit) == int:
-                        datafile = os.path.join(self.meas_cal_dir,f'Readout_{gate_num}_{gate_type}_Circuit{interested_circuit}.csv')
-                    elif type(interested_circuit) == str:
-                        datafile = os.path.join(self.meas_cal_dir,interested_circuit)
-                    else:
-                        raise Exception
+                    datafile = os.path.join(self.meas_cal_dir,'Braket_Qubit_Calibration.json')
+                    print(datafile)
                     cal_data = data_readout(q, datafile=datafile)
-                
+                    print(cal_data)
                     gate_center = cal_data[2] # 3rd element is gate error
                     if not loaded_priors:
                         prior_lambdas[:, 0] = tnorm01(cal_data[0], meas_sd, size=nPrior) # Using calibrated priors based on AWS calibration
@@ -528,7 +517,9 @@ class SplitGateFilter:
                         pass
                 except:
                     gate_center = 0.1 # Broad and poor default
-                    print(f"Warning: Could not read calibration data for gate error on Qubit{q}. Using default {gate_center}.")
+                    print(f"Warning: Could not read calibration data for gate error on Qubit{q}.\n"
+                          "Ensure that the Braket Calibration .json file is location in the SplitGateFilter.meas_cal_dir folder and named 'Braket_Qubit_Calibration.json'\n"
+                          f"Using default calibration value: {gate_center}.")
                 
                 prior_lambdas[:, 2] = tnorm01(gate_center, gate_sd, size=nPrior)
 
@@ -551,18 +542,28 @@ class SplitGateFilter:
                 r_vals = d_ker(qs) / qs_ker(qs)
                 eta = r_vals / max_r
                 accept_mask = eta > np.random.uniform(0, 1, nPrior)
-                post_lambdas = []
                 post_lambdas = prior_lambdas[accept_mask]
+                post_err0 = post_lambdas[:,0]
+                post_err1 = post_lambdas[:,1]
+                post_gaterr = post_lambdas[:,2]
                 
                 # 5. UPDATE DICTIONARY (THE JSON STRUCTURE)
                 q_key = f"Qubit{q}"
                 if q_key not in self.post_full: self.post_full[q_key] = {}
                 if gate_type not in self.post_full[q_key]: self.post_full[q_key][gate_type] = {}
+                if q_key not in self.post: self.post[q_key] = {}
+                if gate_type not in self.post[q_key]: self.post[q_key][gate_type] = {}
                 
                 # We store the samples in the post jsons
-                self.post_full[q_key][gate_type][qubit_couple_key] = post_lambdas
-                self.post[q_key][gate_type][qubit_couple_key] = {'e_mean': float(np.mean(post_lambdas)),
-                                                                'e_mode': float(ss.mode(post_lambdas)[0])}
+                self.post_full[q_key][gate_type][qubit_couple_key] = {'FULL_GATE_ERROR': post_gaterr,
+                                                                      'FULL_MEAS0_ERROR': post_err0,
+                                                                      'FULL_MEAS1_ERROR': post_err1}
+                self.post[q_key][gate_type][qubit_couple_key] = {'GATE_ERROR_MEAN': float(np.mean(post_gaterr)),
+                                                                'GATE_ERROR_MODE': float(ss.mode(post_gaterr)[0]),
+                                                                'MEAS0_ERR_MEAN': float(np.mean(post_err0)),
+                                                                'MEAS0_ERR_MODE': float(ss.mode(post_err0)[0]),
+                                                                'MEAS1_ERR_MEAN': float(np.mean(post_err1)),
+                                                                'MEAS1_ERR_MODE': float(ss.mode(post_err1)[0])}
                 
                 print(f"-> Inferred {len(post_lambdas)} samples for Qubit{q_key} ({qubit_couple_key})")
 
