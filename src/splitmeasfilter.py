@@ -65,9 +65,9 @@ def get_braket_calibration_dict(device_arn, n_qubits=None):
                         for k, v in two_props.items() if str(q) in k.split("-")}
 
         one_gate_fidelity = q_one_prop[0]["fidelity"]
-        pm1p0 = q_one_prop[1]["fidelity"]
-        pm0p1 = q_one_prop[2]["fidelity"]
-        properties[str(q)] = {"pm1p0": pm1p0, "pm0p1": pm0p1, "oneQubitFidelity": one_gate_fidelity, "twoQubitProperties": q_two_props}
+        err0 = q_one_prop[1]["fidelity"]
+        err1 = q_one_prop[2]["fidelity"]
+        properties[str(q)] = {"err0": err0, "err1": err1, "oneQubitFidelity": one_gate_fidelity, "twoQubitProperties": q_two_props}
 
     return properties
 
@@ -225,51 +225,31 @@ def getData0(data, num_group, interested_qubit_index):
         Array of probabilities of measuring 0 for each group.
 
     """
-    # Force conversion to string list to handle numpy ints or bytes
-    data_list = [str(x).strip() for x in data]
-    
-    if len(data_list) == 0:
-        return np.array([])
-
-    # Determine index for interested qubit (Little Endian)
-    # If string is '00', Qubit 0 is at index 1 (end), Qubit 1 at index 0.
-    str_len = len(data_list[0])
     target_idx = interested_qubit_index
     
     # Fallback if qubit index out of bounds
     if target_idx < 0: target_idx = 0 
 
-    is_zero_counts = []
-    
-    # Parse Bits
-    for s in data_list:
-        try:
-            bit = s[target_idx]
-        except IndexError:
-            bit = '0' # Fallback
-            
-        # Check for '0' char. 
-        if bit == '0':
-            is_zero_counts.append(1.0)
-        else:
-            is_zero_counts.append(0.0)
+    data_list = data[:,interested_qubit_index]
 
     # Reshape and Average
-    total_len = len(is_zero_counts)
+    total_len = len(data_list)
     if num_group > total_len or num_group <= 0:
         # Prevent zero division or impossible reshape
-        return np.array(is_zero_counts)
+        return np.array(data_list)
 
     trunc_len = total_len - (total_len % num_group)
     
     if trunc_len == 0:
         return np.array([])
         
-    arr = np.array(is_zero_counts[:trunc_len])
+    arr = np.array(data_list[:trunc_len])
     grouped = arr.reshape(num_group, -1)
     
     # Calculate mean (probability of being 0)
-    prob0 = grouped.mean(axis=1)
+    sum_of_entries = grouped.mean(axis=1)
+
+    prob0 = 1 - sum_of_entries
     
     return prob0
 
@@ -282,9 +262,9 @@ def dq(x, qs_ker, d_ker):
 def findM(qs_ker, d_ker, prep_state):
     """ Find M that maximises the d/q ratio """
     if prep_state == '0':
-        x_scan = np.linspace(0.95, 1, 1000)
+        x_scan = np.linspace(0.9, 1, 1000)
     elif prep_state == '1':
-        x_scan = np.linspace(0, 0.05, 1000)
+        x_scan = np.linspace(0, 0.1, 1000)
     else:
         x_scan = np.linspace(0, 1, 1000)
     
@@ -329,112 +309,6 @@ def QoI_single(lambdas, prep_state='0'):
     elif prep_state == '1':
         return 1.0 - lambdas
     return lambdas
-
-def output(d,
-           interested_qubit,
-           M,
-           params,
-           prior_sd,
-           seed=127,
-           file_address='',
-           prep_state='0'):
-    """
-      The main function that do all Bayesian inferrence part
-
-    Parameters
-    ----------
-    d : array
-        array of data (Observed QoI). Here, it is array of prob. of meas. 0.
-    interested_qubit : int
-        The index of qubit that we are looking at. 
-        For the use of naming the figure file only.
-    M : int
-        Number of priors required.
-    params : dict
-        A dictionary records backend properties. Must have
-        {'pm1p0': float # Pr(Meas. 1| Prep. 0)
-         'pm0p1': float # Pr(Meas. 0| Prep. 1)
-         }
-    prior_sd : float
-        standard deviation for truncated normal distribution when generating 
-        prior parameters (for measurement error).
-    seed : int, optional
-        Seed for random numbers. The default is 127.
-    show_denoised : boolean, optional
-        If plot the comparision between post. parameter and 
-        given parameters in params. The default is False since 
-        it is very time consuming and unnecessary in most of case
-    file_address : String, optional
-        The relative file address to save posteriors and figures. 
-        Ends with '/' if not empty
-        The default is ''.
-
-    Returns
-    -------
-    prior_lambdas : numpy array
-        prior lambdas in the form of a-by-b matrix where 
-        a is the number of priors and m is the number of model parameters
-    post_lambdas : numpy array
-        prior lambdas in the form of a-by-b matrix where 
-        a is the number of posterior and m is the number of model parameters
-
-    """
-    np.random.seed(seed)
-    
-    # Determine Prior Mean from Params
-    if prep_state == '0':
-        prior_mean = 1.0 - params[interested_qubit].get('pm1p0', 0.05)
-    else:
-        prior_mean = 1.0 - params[interested_qubit].get('pm0p1', 0.05)
-
-    if prior_mean > 1.0 or prior_mean < 0.7: prior_mean = 0.95
-
-    # Generate Priors (Success Rates)
-    success_rates = tnorm01(prior_mean, prior_sd, size=M)
-
-    # Map to Observable
-    if prep_state == '0':
-        prob_meas_0 = success_rates
-    elif prep_state == '1':
-        prob_meas_0 = 1.0 - success_rates
-    else:
-        raise ValueError('prep_state must be "0" or "1".')
-    
-    qs = QoI_single(success_rates, prep_state=prep_state)
-
-    # KDE (Protected)
-    try:
-        d_ker = ss.gaussian_kde(d)
-        qs_ker = ss.gaussian_kde(qs)
-    except Exception as e:
-        print(f"   KDE Failed (Data likely singular): {e}")
-        # Fallback: Return original priors if we can't update them
-        return success_rates, success_rates
-
-    print(f'Given Lambda |{prep_state}>: success rate = {prior_mean:.4f}')
-
-    # Optimization
-    max_r, max_q = findM(qs_ker, d_ker, prep_state)
-
-    # Rejection Sampling
-    r_vals = d_ker(qs) / qs_ker(qs)
-    eta = r_vals / max_r 
-    accept_mask = eta > np.random.uniform(0, 1, M)
-    post_success_rates = success_rates[accept_mask]
-
-    # Handle case where rejection sampling rejects everything
-    if len(post_success_rates) == 0:
-        print("   Warning: Rejection sampling rejected all points. Returning priors.")
-        return success_rates, success_rates
-
-    print('   Accepted N: %d (%.1f%%)' % (len(post_success_rates), 100*len(post_success_rates)/M))
-    
-    # Save
-    filename = file_address + f'Post_Qubit{interested_qubit}.csv'
-    np.savetxt(filename, post_success_rates, delimiter=',')
-
-    return success_rates, post_success_rates
-
 
 class SplitMeasFilter:
     """Measurement error filter.
@@ -499,12 +373,12 @@ class SplitMeasFilter:
         self.inv_matrices_mode = []
 
         # Check if data was loaded successfully (checks the first qubit's size)
-        first_q = f'Qubit{self.qubit_order[0]}'
-        if self.post_full[first_q]['0'].size > 0 and self.post_full[first_q]['1'].size > 0:
+        last_q = f'Qubit{self.qubit_order[-1]}'
+        if self.post_full[last_q]['0'].size > 0 and self.post_full[last_q]['1'].size > 0:
             self.create_filter_mat() 
             
             # Recalculate Mean/Mode from the loaded full data
-            self.post = {f'{q}': {
+            self.post = {f'Qubit{q}': {
                 'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 
                 'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
                 'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 
@@ -521,6 +395,107 @@ class SplitMeasFilter:
             self._load_data_from_files() 
             pass
 
+    def output(self,
+            d,
+            qubit,
+            M,
+            params,
+            prior_sd,
+            seed=127,
+            file_address='',
+            prep_state='0'):
+        """
+        The main function that do all Bayesian inferrence part
+
+        Parameters
+        ----------
+        d : array
+            array of data (Observed QoI). Here, it is array of prob. of meas. 0.
+        interested_qubit : int
+            The index of qubit that we are looking at. 
+            For the use of naming the figure file only.
+        M : int
+            Number of priors required.
+        params : dict
+            A dictionary records backend properties. Must have
+            {'err0': float # Pr(Meas. 1| Prep. 0)
+            'err1': float # Pr(Meas. 0| Prep. 1)
+            }
+        prior_sd : float
+            standard deviation for truncated normal distribution when generating 
+            prior parameters (for measurement error).
+        seed : int, optional
+            Seed for random numbers. The default is 127.
+        show_denoised : boolean, optional
+            If plot the comparision between post. parameter and 
+            given parameters in params. The default is False since 
+            it is very time consuming and unnecessary in most of case
+        file_address : String, optional
+            The relative file address to save posteriors and figures. 
+            Ends with '/' if not empty
+            The default is ''.
+
+        Returns
+        -------
+        prior_lambdas : numpy array
+            prior lambdas in the form of a-by-b matrix where 
+            a is the number of priors and m is the number of model parameters
+        post_lambdas : numpy array
+            prior lambdas in the form of a-by-b matrix where 
+            a is the number of posterior and m is the number of model parameters
+
+        """
+        np.random.seed(seed)
+        # Determine Prior Mean from Params
+        if prep_state == '0':
+            prior_mean = 1.0 - params[f'Qubit{qubit}'].get('err0', 0.05)
+        else:
+            prior_mean = 1.0 - params[f'Qubit{qubit}'].get('err1', 0.05)
+
+        if prior_mean > 1.0 or prior_mean < 0.7: prior_mean = 0.95
+        # Generate Priors (Success Rates)
+        success_rates = tnorm01(prior_mean, prior_sd, size=M)
+        # Map to Observable
+        if prep_state == '0':
+            prob_meas_0 = success_rates
+        elif prep_state == '1':
+            prob_meas_0 = 1.0 - success_rates
+        else:
+            raise ValueError('prep_state must be "0" or "1".')
+        qs = QoI_single(success_rates, prep_state=prep_state)
+        # KDE (Protected)
+        try:
+            d_ker = ss.gaussian_kde(d)
+            qs_ker = ss.gaussian_kde(qs)
+        except Exception as e:
+            print(f"   KDE Failed (Data likely singular): {e}")
+            # Fallback: Return original priors if we can't update them
+            return success_rates, success_rates
+
+        print(f'Given Lambda |{prep_state}>: success rate = {prior_mean:.4f}')
+
+        # Optimization
+        max_r, max_q = findM(qs_ker, d_ker, prep_state)
+
+        # Rejection Sampling
+        r_vals = d_ker(qs) / qs_ker(qs)
+        eta = r_vals / max_r 
+        accept_mask = eta > np.random.uniform(0, 1, M)
+        post_success_rates = success_rates[accept_mask]
+
+        # Handle case where rejection sampling rejects everything
+        if len(post_success_rates) == 0:
+            print("   Warning: Rejection sampling rejected all points. Returning priors.")
+            return success_rates, success_rates
+
+        print('   Accepted N: %d (%.1f%%)' % (len(post_success_rates), 100*len(post_success_rates)/M))
+        
+        # Save
+        filename = file_address + f'Post_Qubit{qubit}.csv'
+        np.savetxt(filename, post_success_rates, delimiter=',')
+
+        return success_rates, post_success_rates
+
     def _load_posterior_marginals(self):
         for prep_state in ['0', '1']:
             for q in self.qubit_order:
@@ -536,35 +511,39 @@ class SplitMeasFilter:
         path0 = os.path.join(self.file_address, 'State0.csv')
         if os.path.exists(path0):
             try:
-                self.data['0'] = pd.read_csv(path0, header=None, dtype=str).values.flatten()
-                print(f"Loaded {len(self.data['0'])} shots for State 0.")
+                self.data['0'] = np.loadtxt(path0, dtype = float,delimiter=',')
+                print(f"Loaded {np.size(self.data['0'],axis=0)} shots for State 0.")
             except Exception as e:
                 print(f"Error reading {path0}: {e}")
         else:
             print(f"Warning: {path0} not found.")
 
         # State 1
-        p1 = os.path.join(self.file_address, 'State1.csv')
-        if os.path.exists(p1):
+        path1 = os.path.join(self.file_address, 'State1.csv')
+        if os.path.exists(path1):
             try:
-                self.data['1'] = pd.read_csv(p1, header=None, dtype=str).values.flatten()
-                print(f"Loaded {len(self.data['1'])} shots for State 1.")
+                self.data['1'] = np.loadtxt(path1, dtype = float,delimiter=',')
+                print(f"Loaded {np.size(self.data['1'],axis=0)} shots for State 1.")
             except Exception as e:
-                print(f"Error reading {p1}: {e}")
+                print(f"Error reading {path1}: {e}")
         else:
-            print(f"Warning: {p1} not found.")
+            print(f"Warning: {path1} not found.")
 
     def inference(self,
+                  num_points,
                   nPrior=40000,
                   prior_sd=0.1,
                   seed=227,
-                  shots_per_point=1024,
                   prep_state='0'):
         """
           Do Bayesian interence
 
         Parameters
         ----------
+        num_points : int
+            Number of samples to use in the kernel density estimation.
+            Default not given, as this is an important parameter,
+            to be considered based on error rate magnitude and shot number.
         nPrior : int, optional
             Number of priors required. The default is 40000.
             Same as M in output().
@@ -575,10 +554,6 @@ class SplitMeasFilter:
         seed : int, optional
             Seed for random numbers. The default is 227.
             Same as seed in output().
-        shots_per_point : int, optional
-            how many shots you want to estimate one QoI (prob. of meas. 0).
-            Used to control number of data points and accuracy.
-            The default is 1024.
         show_denoised : boolean, optional
             If plot the comparision between post. parameter and 
             given parameters in params. The default is False since 
@@ -592,18 +567,18 @@ class SplitMeasFilter:
         """
         # Select Data
         current_data = self.data.get(prep_state, np.array([]))
-        total_shots = len(current_data)
+        total_shots = np.size(current_data,axis=0)
 
         if total_shots == 0:
              print(f"CRITICAL: No data for prep_state='{prep_state}'. Skipping.")
              return
 
         # Robust Grouping Calculation
-        num_points = int(total_shots / shots_per_point)
         # Ensure at least 20 points for KDE
-        if num_points < 20:
-            print(f"   Notice: Adjusting grouping. (Original points: {num_points})")
-            num_points = 20
+        if num_points < 16:
+            print(f"-----------------------------------\n"
+                    f"Notice: Consider Adjusting grouping to ensure good sample size. num_points > 16 is recommended, whereas {num_points} is given\n"
+                    f"-----------------------------------")
             # Fallback if total data is tiny
             if total_shots < 20: 
                 num_points = total_shots
@@ -615,17 +590,18 @@ class SplitMeasFilter:
         else:
             valid_data = current_data
             
-        print(f"   Debug: Using {len(valid_data)} shots split into {num_points} points for KDE.")
+        print(f"   Using {np.size(valid_data, axis=0)} shots split into {num_points} points for KDE.")
 
         # Setup Params
-        if self.params is None:
+        if not self.params:
             self.params = {}
-            for q in self.qubit_order:
-                self.params[q] = {'pm1p0': 0.005, 'pm0p1': 0.005}
+            for idx,q in enumerate(self.qubit_order):
+                self.params[f'Qubit{q}'] = {'err0': 0.005, 'err1': 0.005}
+            print("No Parameters Given: uninformed prior error rates set to 0.005, standard deviation set to {prior_sd}")
 
         # Inference Loop
         for idx,q in enumerate(self.qubit_order):                       # The qubit array order giving the index is given by the aws bracket as `task.result().measurement_qubits`
-            print(f'Inferring Qubit {idx} for State |{prep_state}>')
+            print(f'Inferring Qubit {q} for State |{prep_state}>')
             
             try:
                 d = getData0(valid_data, num_points, idx)
@@ -634,40 +610,38 @@ class SplitMeasFilter:
                 continue
 
             if len(d) < 5:
-                print(f"   Error: Resulting dataset too small (len={len(d)}). Skipping Qubit {idx}.")
+                print(f"   Error: Resulting dataset too small (len={len(d)}). Skipping Qubit {q}.")
                 continue
 
             state_prefix = self.file_address + f"State{prep_state}_"
             
             try:
-                prior_lambdas, post_lambdas = output(
-                    d, idx, nPrior, self.params, prior_sd, 
+                prior_lambdas, post_lambdas = self.output(
+                    d, q, nPrior, self.params, prior_sd, 
                     seed=seed, file_address=state_prefix, prep_state=prep_state
-                )
-                
+                )                
                 self.prior[f'Qubit{q}'] = prior_lambdas
                 self.post_full[f'Qubit{q}'][prep_state] = post_lambdas
             except Exception as e:
                 print(f"   Inference failed for Qubit {q}: {e}")
                 
         # Matrix Creation (Safe Check)
-        first_q = f'Qubit{self.qubit_order[0]}'
-        has_0 = len(self.post_full[first_q]['0']) > 0
-        has_1 = len(self.post_full[first_q]['1']) > 0
+        last_q = f'Qubit{self.qubit_order[-1]}'
+        has_0 = len(self.post_full[last_q]['0']) > 0
+        has_1 = len(self.post_full[last_q]['1']) > 0
         
         if has_0 and has_1:
             self.create_filter_mat()
 
-
-        if self.post_full[first_q]['0'].size > 0 and self.post_full[first_q]['1'].size > 0:
+        if self.post_full[last_q]['0'].size > 0 and self.post_full[last_q]['1'].size > 0:
             # Calculate stats
-            self.post = {f'{q}': {
+            self.post = {f'Qubit{q}': {
                 'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 
                 'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
                 'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 
                 'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]),
             } for q in self.qubit_order}
-            
+
             print("Inference Complete, Saving Results...")
 
             # Update extensions to .json
@@ -1007,7 +981,7 @@ class SplitMeasFilter:
             """
             stats = {}
 
-            for q in self.qubit_order:
+            for idx,q in enumerate(self.qubit_order):
                 q_key = f'Qubit{q}'
                 
                 # 1. Retrieve Success Rates (Lambdas)
@@ -1038,14 +1012,14 @@ class SplitMeasFilter:
                 # 4. Plotting (KDE + Histogram)
                 if plotting:
                     plt.figure(figsize=(8, 5), dpi=100)
-                    xs = np.linspace(0, 0.05, 1000)
+                    xs = np.linspace(0, 0.1, 1000)
                     # Plot Error 0 (Readout error on |0>)
                     kde0 = ss.gaussian_kde(err0_samples)
                     plt.plot(xs, kde0(xs), color='blue', label=r'$P(1|0)$ (Error on 0)')
                     plt.fill_between(xs, kde0(xs), alpha=0.2, color='blue')
 
                     # Plot Data KDE for comparison
-                    d0 = getData0(self.data.get('0', np.array([])), num_points, q)
+                    d0 = getData0(self.data.get('0', np.array([])), num_points, idx)
                     if len(d0) > 0:
                         d0_ker = ss.gaussian_kde(d0)
                         plt.plot(xs, d0_ker(1 - xs), color='darkslateblue', linestyle='--', label='Data KDE (State |0>)')
@@ -1057,7 +1031,7 @@ class SplitMeasFilter:
                     plt.fill_between(xs, kde1(xs), alpha=0.2, color='red')
 
                     # Plot Data KDE for comparison
-                    d1 = getData0(self.data.get('1', np.array([])), num_points, q)
+                    d1 = getData0(self.data.get('1', np.array([])), num_points, idx)
                     if len(d1) > 0:
                         d1_ker = ss.gaussian_kde(d1)
                         plt.plot(xs, d1_ker(xs), color='firebrick', linestyle='--', label='Data KDE (State |1>)')
@@ -1068,7 +1042,7 @@ class SplitMeasFilter:
                     plt.ylabel('Density')
                     plt.legend()
                     plt.grid(True, alpha=0.3)
-                    plt.xlim([0,0.05])
+                    plt.xlim([0,0.1])
                     
                     if save_plots:
                         plt.savefig(self.file_address + f'ErrorDist_Qubit{q}.pdf')
