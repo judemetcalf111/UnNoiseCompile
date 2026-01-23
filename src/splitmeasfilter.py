@@ -481,7 +481,7 @@ class SplitMeasFilter:
         print('   Accepted N: %d (%.1f%%)' % (len(post_log_error_rates), 100*len(post_log_error_rates)/M))
         
         # Save
-        filename = os.path.join(State_Data_address, f'Post_Qubit{qubit}.csv')
+        filename = State_Data_address + f'Post_Qubit{qubit}.csv'
         np.savetxt(filename, post_log_error_rates, delimiter=',')
 
         return prior_log_error_rates, post_log_error_rates
