@@ -162,17 +162,13 @@ def dict_filter(data_dict: dict, percent: float = 99.0) -> dict:
             break
     return filtered_dict
 
-def getData0(data, num_group, interested_qubit_index):
+def getData0(data, interested_qubit_index):
     """ Get the probabilities of measuring 0 from binary readouts
-        **Binary number follows little-endian convention**
 
     Parameters
     ----------
     data : array_like
         An array of binary readout strings (e.g., ['001', '010']).
-    num_group : int
-        Number of groups to split the data into for probability calculation.
-        Data length must be divisible by num_group.
     interested_qubit_index : int
         The index of the qubit to analyze (0-indexed).
 
@@ -189,48 +185,35 @@ def getData0(data, num_group, interested_qubit_index):
 
     data_list = data[:,interested_qubit_index]
 
-    # Reshape and Average
-    total_len = len(data_list)
-    if num_group > total_len or num_group <= 0:
-        # Prevent zero division or impossible reshape
-        return np.array(data_list)
-
-    trunc_len = total_len - (total_len % num_group)
-    
-    if trunc_len == 0:
-        return np.array([])
-        
-    arr = np.array(data_list[:trunc_len])
-    grouped = arr.reshape(num_group, -1)
-    
-    # Calculate mean (probability of being 0)
-    mean_of_entries = grouped.mean(axis=1)
+    mean_of_entries = np.mean(data_list)
 
     prob0 = 1 - mean_of_entries
     
     return prob0
 
 def dq(x, qs_ker, d_ker):
-    if np.abs(qs_ker(x)[0]) > 1e-6 and np.abs(d_ker(x)[0]) > 1e-6:
-        return - d_ker(x)[0] / qs_ker(x)[0] 
+    if np.abs(qs_ker(x)[0]) > 1e-6 and np.abs(d_ker(x)) > 1e-6:
+        return - d_ker(x) / qs_ker(x)[0]
     else:
         return np.inf
 
 def findM(qs_ker, d_ker):
     """ Find M that maximises the d/q ratio for rejection sampling """
     
-    # RECOMMENDED: Increase scan range. 0.1 is too narrow for high-error qubits.
-    x_scan = np.linspace(0, 0.5, 2000) 
+    # Find the min value in log-space (thus negative)
+    x_scan = np.linspace(0, 0.1, 4000) 
     
     prior_density = qs_ker(x_scan)
+    data_density = d_ker(x_scan)
     threshold = 0.01 * np.max(prior_density)
     
     # Get indices where prior is significant
     valid_indices = np.where(prior_density > threshold)[0]
-    
+
     if len(valid_indices) > 1:
         # Calculate -Ratio
         ys = np.array([dq(x_scan[i], qs_ker, d_ker) for i in valid_indices])
+
         res = np.min(ys) # This is the most negative value (e.g., -50)
         # Plot the rejection sampling diagnostic
         plt.figure(figsize=(8, 5))
@@ -241,21 +224,24 @@ def findM(qs_ker, d_ker):
         plt.grid(True, alpha=0.3)
         plt.show()
         
+        x_plot = np.linspace(0,0.2,2000)
+        plot_prior_density = qs_ker(x_plot)
+        plot_data_density = d_ker(x_plot)
         plt.figure(figsize=(8, 5))
-        plt.plot(x_scan, prior_density, label='Prior density', color='red', alpha=0.7)
+        plt.plot(x_plot, plot_prior_density, label='Prior Density', color='red', alpha=0.7)
+        plt.fill_between(x_plot, plot_prior_density,color='red', alpha=0.1)
+        plt.plot(x_plot, plot_data_density, label='Data Density', color='blue', alpha=0.7)
+        plt.fill_between(x_plot, plot_data_density,color='blue', alpha=0.1)
         plt.xlabel('Error rate')
-        plt.title('Prior Distribution')
+        plt.title('Prior and Data Distribution')
+        plt.legend()
         plt.grid(True, alpha=0.3)
         plt.show()
 
     else:
         raise Exception
-
-
     
-    # FIX IS HERE: Return the positive magnitude (e.g., 50)
     return -res
-
 def meas_data_readout(qubit, prep_state, datafile: str = ''):
     """
     Function to readout json files or suitable numpy arrays
@@ -371,6 +357,7 @@ class SplitMeasFilter:
     def output(self,
             d,
             qubit,
+            total_shots,
             M,
             params,
             prior_sd,
@@ -445,7 +432,10 @@ class SplitMeasFilter:
         else:
             data_errors = d
         try:
-            d_ker = ss.gaussian_kde(data_errors)
+            # To define P(p|error_count), we use the Beta distribution, as this is the inverse of the Binomial distribution. 
+            # Proportional to Beta(alpha = successes+1, beta = total_trials - successes + 1)
+            def d_ker(x):
+                return ss.beta.pdf(x, (data_errors*total_shots) + 1, total_shots*(1 - data_errors) + 1)
             qs_ker = ss.gaussian_kde(qs)
         except Exception as e:
             print(f"   KDE Failed (Data likely singular): {e}")
@@ -512,7 +502,6 @@ class SplitMeasFilter:
             print(f"Warning: {path1} not found.")
 
     def inference(self,
-                  num_points,
                   nPrior=40000,
                   prior_sd=0.1,
                   seed=227,
@@ -522,10 +511,6 @@ class SplitMeasFilter:
 
         Parameters
         ----------
-        num_points : int
-            Number of samples to use in the kernel density estimation.
-            Default not given, as this is an important parameter,
-            to be considered based on error rate magnitude and shot number.
         nPrior : int, optional
             Number of priors required. The default is 40000.
             Same as M in output().
@@ -555,39 +540,14 @@ class SplitMeasFilter:
              print(f"CRITICAL: No data for prep_state='{prep_state}'. Skipping.")
              return
 
-        # Robust Grouping Calculation
-        # Ensure at least 20 points for KDE
-        if num_points < 16:
-            print(f"-----------------------------------\n"
-                    f"Notice: Consider Adjusting grouping to ensure good sample size. num_points > 16 is recommended, whereas {num_points} is given\n"
-                    f"-----------------------------------")
-            # Fallback if total data is tiny
-            if total_shots < 20: 
-                num_points = total_shots
-
-        # Trim data for perfect division
-        remainder = total_shots % num_points
-        if remainder != 0:
-            valid_data = current_data[:-remainder]
-        else:
-            valid_data = current_data
-            
-        print(f"   Using {np.size(valid_data, axis=0)} shots split into {num_points} points for KDE.")
-
-        # Inference Loop
         for idx,q in enumerate(self.qubit_order):                       # The qubit array order giving the index is given by the aws bracket as `task.result().measurement_qubits`
             print(f'Inferring Qubit {q} for State |{prep_state}>')
             
             try:
-                d = getData0(valid_data, num_points, idx)
+                d = getData0(current_data, idx)
             except Exception as e:
                 print(f"   Error in getData0: {e}")
                 continue
-
-            if len(d) < 5:
-                print(f"   Error: Resulting dataset too small (len={len(d)}). Skipping Qubit {q}.")
-                continue
-            
 
             Posterior_dir = os.path.join(self.file_address, "Posterior Data")
             os.makedirs(Posterior_dir, exist_ok=True)
@@ -595,7 +555,7 @@ class SplitMeasFilter:
             
             try:
                 prior_lambdas, post_lambdas = self.output(
-                    d, q, nPrior, self.params, prior_sd, 
+                    d, q,total_shots, nPrior, self.params, prior_sd, 
                     seed=seed, State_Data_address=state_prefix, prep_state=prep_state
                 )                
                 self.prior[f'Qubit{q}'] = prior_lambdas
@@ -642,7 +602,7 @@ class SplitMeasFilter:
         print(f"Saved Full Posterior to:\n{full_path_datetime}\nand\n{full_path_current}")
         print(f"Saved Mean/Mode Summary to:\n{meanmode_path_datetime}\nand\n{meanmode_path_current}")
         
-        self.error_distributions(plotting=True, save_plots=True, num_points=num_points)
+        self.error_distributions(plotting=True, save_plots=True)
 
     def create_filter_mat(self):
         self.inv_matrices_mean = []
@@ -946,7 +906,7 @@ class SplitMeasFilter:
         return final_data
         
 
-    def error_distributions(self, plotting=True, save_plots=False, num_points=32):
+    def error_distributions(self, plotting=True, save_plots=False):
             """
             Calculates statistics and (optionally) plots the posterior distribution 
             of measurement errors for each qubit.
@@ -1007,7 +967,7 @@ class SplitMeasFilter:
                         plt.fill_between(xs, kde0(xs), alpha=0.2, color='blue')
 
                         # Plot Data KDE for comparison
-                        d0 = getData0(self.data.get('0', np.array([])), num_points, idx)
+                        d0 = getData0(self.data.get('0', np.array([])), idx)
                         err0 = 1 - d0
                         if len(d0) > 0:
                             d0_ker = ss.gaussian_kde(err0)
@@ -1021,7 +981,7 @@ class SplitMeasFilter:
                         plt.fill_between(xs, kde1(xs), alpha=0.2, color='red')
 
                         # Plot Data KDE for comparison
-                        d1 = getData0(self.data.get('1', np.array([])), num_points, idx)
+                        d1 = getData0(self.data.get('1', np.array([])), idx)
                         err1 = d1
                         if len(d1) > 0:
                             d1_ker = ss.gaussian_kde(err1)
