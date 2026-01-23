@@ -17,7 +17,6 @@ import numpy.linalg as nl
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 from aquarel import load_theme
-from braket.aws import AwsDevice
 
 
 # Optional: Apply theme if available
@@ -30,47 +29,6 @@ except:
 
 width = 6.72 
 height = 4.15 
-
-def get_braket_calibration_dict(device_arn, n_qubits=None):
-    """
-    Returns the params list in the exact format required by MeasFilter.
-    """
-    device = AwsDevice(device_arn)
-    properties = device.properties
-    standardized = getattr(properties, "standardized", None)
-    if standardized and hasattr(standardized, "dict"):
-        qubit_props = standardized.dict()
-    else:
-        try:
-            qubit_props = properties.dict()
-        except:
-            qubit_props = {}
-    
-    one_props = qubit_props["oneQubitProperties"]
-    two_props = qubit_props["twoQubitProperties"]
-    one_props_len = len(one_props)
-
-    if n_qubits is None:
-        n_qubits = one_props_len
-    else:
-        if one_props_len != n_qubits:
-            print(f"Warning: Provided n_qubits={n_qubits} does not match device oneQubitProperties length={one_props_len}. Using device length, as qubits are likely down.")
-        else:
-            n_qubits = one_props_len
-            
-    properties = {}
-    for q in range(n_qubits):
-        q_one_prop = one_props[str(q)]["oneQubitFidelity"]
-        q_two_props = {k: v["twoQubitGateFidelity"][0]["fidelity"]
-                        for k, v in two_props.items() if str(q) in k.split("-")}
-
-        one_gate_fidelity = q_one_prop[0]["fidelity"]
-        err0 = q_one_prop[1]["fidelity"]
-        err1 = q_one_prop[2]["fidelity"]
-        properties[str(q)] = {"err0": err0, "err1": err1, "oneQubitFidelity": one_gate_fidelity, "twoQubitProperties": q_two_props}
-
-    return properties
-
 
 
 
@@ -86,25 +44,41 @@ class NumpyEncoder(json.JSONEncoder):
             return float(o)
         return super(NumpyEncoder, self).default(o)
 
-def tnorm01(center, sd, size=1):
-    """ Generate random numbers for truncated normal with range [0,1]
-
-    Args:
-      center: float
-        mean of normal distribution
-      sd: float
-        standard deviation of normal distribution
-      size: int
-        number of random numbers
-
-    Returns: array
-       an array of random numbers
+def gen_log_prior(center_err_linear, sd_log, size=1):
     """ 
-    upper = 1
-    lower = 0
-    if sd == 0: return np.full(size, center)
-    a, b = (lower - center) / sd, (upper - center) / sd
-    return ss.truncnorm.rvs(a, b, size=size) * sd + center
+    Generate random error rates based on a Normal distribution in Log-10 space.
+    This ensures error rates are strictly positive (physical).
+    
+    Args:
+      center_err_linear: float
+        The estimated error rate in linear space (e.g., 0.01).
+      sd_log: float
+        Standard deviation in orders of magnitude (e.g., 0.5 means half a decade).
+      size: int
+        Number of samples.
+        
+    Returns: 
+      linear_errors: numpy array
+        Array of error rates in linear space (0 to 1).
+    """
+
+    # Very generous safety floor to prevent log(0)
+    if center_err_linear <= 1e-9: center_err_linear = 1e-4
+    
+    # Convert center to natural-log space (e.g., 0.01 -> -2.0)
+    mu = np.log(center_err_linear)
+    
+    # Sample from log-normal space
+    log_vals = ss.norm.rvs(loc=mu, scale=sd_log, size=size)
+    
+    # Clip upper bound to 0 (log(1)=0) to ensure probability <= 1
+    # We clip lower bound to -10 (error 1e-10) to prevent underflow issues
+    log_vals = np.clip(log_vals, -10, -1e-9)
+
+    linear_errors = np.exp(log_vals)
+    
+    # Convert back to linear space
+    return linear_errors
 
 def find_mode(data):
     """Find the mode through Gaussian KDE.
@@ -247,9 +221,12 @@ def getData0(data, num_group, interested_qubit_index):
     grouped = arr.reshape(num_group, -1)
     
     # Calculate mean (probability of being 0)
+    # ... inside getData0 ...
     mean_of_entries = grouped.mean(axis=1)
-
     prob0 = 1 - mean_of_entries
+    
+    # Clip to physics floor (e.g. 1e-9) to prevent log(0)
+    prob0 = np.clip(prob0, 1e-9, 1.0 - 1e-9)
     
     return prob0
 
@@ -261,54 +238,60 @@ def dq(x, qs_ker, d_ker):
 
 def findM(qs_ker, d_ker, prep_state):
     """ Find M that maximises the d/q ratio """
-    if prep_state == '0':
-        x_scan = np.linspace(0.9, 1, 1000)
-    elif prep_state == '1':
-        x_scan = np.linspace(0, 0.1, 1000)
-    else:
-        x_scan = np.linspace(0, 1, 1000)
-    
+    x_scan = np.linspace(-10, -2, 10000) # Scan the log-space, which will be entirely negative, and should be less than -2...
+
+    # Prevent divide-by-zero issues
     prior_density = qs_ker(x_scan)
     threshold = 0.01 * np.max(prior_density)
     valid_indices = np.where(prior_density > threshold)[0]
     
-    if len(valid_indices) > 1:
-        lower_bound = x_scan[valid_indices[0]]
-        upper_bound = x_scan[valid_indices[-1]]
-        bds = (lower_bound, upper_bound)
-    else:
-        bds = (0.0, 1.0) 
-
-    ys = np.array([dq(x, qs_ker, d_ker) for x in x_scan])
+    ys = np.array([dq(x, qs_ker, d_ker) for x in valid_indices],dtype = float)
     
-    # Safe argmin
-    if len(valid_indices) > 0:
-        valid_ys = ys[valid_indices]
-        valid_xs = x_scan[valid_indices]
-        x0 = valid_xs[np.argmin(valid_ys)]
-    else:
-        x0 = 0.5
-
     # Run Optimizer
-    try:
-        res = minimize(dq, (x0,), args=(qs_ker, d_ker), bounds=(bds,), method='L-BFGS-B')
-        
-        # Plotting (Optional - can comment out for speed)
-        plt.figure(figsize=(width,height), dpi=100)
-        plt.plot(1 - x_scan, ys, c='crimson', lw=2)
-        plt.title("-Data/Prior PDFs")
-        plt.show()
-        
-        return -res.fun[0] if isinstance(res.fun, np.ndarray) else -res.fun, res.x[0] if isinstance(res.x, np.ndarray) else res.x
-    except:
-        return 1.0, x0 # Fallback
+    minimiser=-float(np.min(ys))
+    
+    # Plotting (Optional - can comment out for speed)
+    plt.figure(figsize=(width,height), dpi=100)
+    plt.plot(x_scan, ys, c='crimson', lw=2)
+    plt.xlabel(f"Error Rate from |{prep_state}>")
+    plt.title("-Data/Prior PDFs")
+    # plt.show()
 
-def QoI_single(lambdas, prep_state='0'):
+    plt.figure(figsize=(width,height), dpi=100)
+    plt.plot(x_scan, qs_ker(x_scan), c='crimson', lw=2)
+    plt.title("Prior PDF")
+    plt.xlabel(f"Error Rate from |{prep_state}>")
+    plt.ylabel("Probability Density")
+    plt.show()
+        
+    return minimiser
+
+
+def meas_data_readout(qubit, prep_state, datafile: str = ''):
+    """
+    Function to readout json files or suitable numpy arrays
+    """
+
+    if type(qubit) != int:
+        raise Exception("Must supply an integer label for the interested qubit in `meas_data_readout()`") 
+
+    if datafile.endswith('.json'):
+        with open(str(datafile), 'r') as file:
+            data = json.load(file)
+        qubit_props = data['oneQubitProperties']
+        
+        epsilon01 = qubit_props[str(qubit)]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+        epsilon10 = qubit_props[str(qubit)]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+
+    elif not datafile:
+        raise Exception("Error: No data or datafile provided for the `meas_data_readout()`")
+    else:
+        raise Exception("Must either:\nsupply datafile as path string to a json data file, i.e. '../data/datafile.json'\nor supply a nx3 numpy array with 0 -> 1 errors, 1 -> 0 errors, and gate errors in each row (ONLY AVAILABLE FOR SINGLE QUBIT GATES)")
+
     if prep_state == '0':
-        return lambdas 
-    elif prep_state == '1':
-        return 1.0 - lambdas
-    return lambdas
+        return epsilon01
+    else:
+        return epsilon10
 
 class SplitMeasFilter:
     """Measurement error filter.
@@ -350,6 +333,7 @@ class SplitMeasFilter:
         
         self.prior = {}
         self.post_full = {f'Qubit{q}': {'0': np.array([]), '1': np.array([])} for q in qubit_order}
+        self.post = {f'Qubit{q}': {} for q in qubit_order}
         full_post_path = Path(os.path.join(self.file_address, 'Post_Full_Current.json'))
         
         if full_post_path.is_file() and load_data == True:
@@ -368,7 +352,7 @@ class SplitMeasFilter:
                 print(f"Failed to load JSON data: {exc}")
 
         # Device calibration loading
-        self.params = None if device is None else get_braket_calibration_dict(device, n_qubits=len(qubit_order))
+        self.params = None #if device is None else get_braket_calibration_dict(device, n_qubits=len(qubit_order))
         self.inv_matrices_mean = []
         self.inv_matrices_mode = []
 
@@ -395,14 +379,14 @@ class SplitMeasFilter:
             self._load_data_from_files() 
             pass
 
-    def output(self,
-            d,
+    def logoutput(self,
+            log_data,
             qubit,
             M,
             params,
             prior_sd,
             seed=127,
-            file_address='',
+            State_Data_address='',
             prep_state='0'):
         """
         The main function that do all Bayesian inferrence part
@@ -410,7 +394,7 @@ class SplitMeasFilter:
         Parameters
         ----------
         d : array
-            array of data (Observed QoI). Here, it is array of prob. of meas. 0.
+            array of data (Observed QoI). Here, it is array of logarithms of the errors for a number of batches.
         interested_qubit : int
             The index of qubit that we are looking at. 
             For the use of naming the figure file only.
@@ -423,7 +407,7 @@ class SplitMeasFilter:
             }
         prior_sd : float
             standard deviation for truncated normal distribution when generating 
-            prior parameters (for measurement error).
+            prior parameters (for log measurement error).
         seed : int, optional
             Seed for random numbers. The default is 127.
         show_denoised : boolean, optional
@@ -447,54 +431,60 @@ class SplitMeasFilter:
         """
         np.random.seed(seed)
         # Determine Prior Mean from Params
-        if prep_state == '0':
-            prior_mean = 1.0 - params[f'Qubit{qubit}'].get('err0', 0.05)
-        else:
-            prior_mean = 1.0 - params[f'Qubit{qubit}'].get('err1', 0.05)
 
-        if prior_mean > 1.0 or prior_mean < 0.7: prior_mean = 0.95
-        # Generate Priors (Success Rates)
-        success_rates = tnorm01(prior_mean, prior_sd, size=M)
-        # Map to Observable
-        if prep_state == '0':
-            prob_meas_0 = success_rates
-        elif prep_state == '1':
-            prob_meas_0 = 1.0 - success_rates
+        calib_file = os.path.join(self.file_address, 'Braket_Qubit_Calibration.json')
+        if self.params:
+            if prep_state == '0':
+                prior_mean_error = params[f'Qubit{qubit}'].get('err0', 0.05)
+            else:
+                prior_mean_error = params[f'Qubit{qubit}'].get('err1', 0.05)
+        elif os.path.isfile(calib_file):
+            prior_mean_error = meas_data_readout(qubit=qubit, prep_state=prep_state, datafile=calib_file)
+            print(f"From the AWS Qubit Calibration, we find that the error rate is: {prior_mean_error:.5}")
         else:
-            raise ValueError('prep_state must be "0" or "1".')
-        qs = QoI_single(success_rates, prep_state=prep_state)
-        # KDE (Protected)
+            print("Either didn't provide 'params = {...}' (not recommended)\n" 
+                  f"and no file named {calib_file} located in the {self.file_address} directory")
+            prior_mean_error = 0.05
+
+        prior_log_mean_error = np.log(prior_mean_error)
+
+        # Generate Priors (Success Rates)
+        prior_log_error_rates = np.atleast_1d(ss.norm.rvs(prior_log_mean_error, prior_sd, size=int(M)))
+
+        qs = prior_log_error_rates
+        
         try:
-            d_ker = ss.gaussian_kde(d)
-            qs_ker = ss.gaussian_kde(qs)
+            log_d_ker = ss.gaussian_kde(log_data)
+            log_qs_ker = ss.gaussian_kde(qs)
         except Exception as e:
             print(f"   KDE Failed (Data likely singular): {e}")
             # Fallback: Return original priors if we can't update them
-            return success_rates, success_rates
+            return prior_log_error_rates, prior_log_error_rates
 
-        print(f'Given Lambda |{prep_state}>: prior success rate = {prior_mean:.4f}')
+        print(f'Given Lambda |{prep_state}>: prior error rate = {prior_mean_error:.4f}')
 
         # Optimization
-        max_r, max_q = findM(qs_ker, d_ker, prep_state)
+        max_r = findM(log_qs_ker, log_d_ker, prep_state)
+        print(f"MAX VALUE: {max_r}")
 
         # Rejection Sampling
-        r_vals = d_ker(qs) / qs_ker(qs)
+        r_vals = log_d_ker(qs) / log_qs_ker(qs)
         eta = r_vals / max_r 
         accept_mask = eta > np.random.uniform(0, 1, M)
-        post_success_rates = success_rates[accept_mask]
+        post_log_error_rates = prior_log_error_rates[accept_mask]
 
         # Handle case where rejection sampling rejects everything
-        if len(post_success_rates) == 0:
+        if len(post_log_error_rates) == 0:
             print("   Warning: Rejection sampling rejected all points. Returning priors.")
-            return success_rates, success_rates
+            return prior_log_error_rates, prior_log_error_rates
 
-        print('   Accepted N: %d (%.1f%%)' % (len(post_success_rates), 100*len(post_success_rates)/M))
+        print('   Accepted N: %d (%.1f%%)' % (len(post_log_error_rates), 100*len(post_log_error_rates)/M))
         
         # Save
-        filename = file_address + f'Post_Qubit{qubit}.csv'
-        np.savetxt(filename, post_success_rates, delimiter=',')
+        filename = os.path.join(State_Data_address, f'Post_Qubit{qubit}.csv')
+        np.savetxt(filename, post_log_error_rates, delimiter=',')
 
-        return success_rates, post_success_rates
+        return prior_log_error_rates, post_log_error_rates
 
     def _load_posterior_marginals(self):
         for prep_state in ['0', '1']:
@@ -532,7 +522,7 @@ class SplitMeasFilter:
     def inference(self,
                   num_points,
                   nPrior=40000,
-                  prior_sd=0.1,
+                  prior_sd=0.5,
                   seed=227,
                   prep_state='0'):
         """
@@ -593,35 +583,39 @@ class SplitMeasFilter:
         print(f"   Using {np.size(valid_data, axis=0)} shots split into {num_points} points for KDE.")
 
         # Setup Params
-        if not self.params:
-            self.params = {}
-            for idx,q in enumerate(self.qubit_order):
-                self.params[f'Qubit{q}'] = {'err0': 0.005, 'err1': 0.005}
-            print("No Parameters Given: uninformed prior error rates set to 0.005, standard deviation set to {prior_sd}")
+        # if not self.params:
+        #     self.params = {}
+        #     for idx,q in enumerate(self.qubit_order):
+        #         self.params[f'Qubit{q}'] = {'err0': 0.005, 'err1': 0.005}
+        #     print(f"No Parameters Given: uninformed prior error rates set to 0.005, standard deviation set to {prior_sd}")
 
         # Inference Loop
         for idx,q in enumerate(self.qubit_order):                       # The qubit array order giving the index is given by the aws bracket as `task.result().measurement_qubits`
+            q = int(q)
             print(f'Inferring Qubit {q} for State |{prep_state}>')
             
             try:
-                d = getData0(valid_data, num_points, idx)
+                prob_of_getting_zero = getData0(valid_data, num_points, idx)
             except Exception as e:
                 print(f"   Error in getData0: {e}")
                 continue
 
-            if len(d) < 5:
-                print(f"   Error: Resulting dataset too small (len={len(d)}). Skipping Qubit {q}.")
+            if len(prob_of_getting_zero) < 5:
+                print(f"   Error: Resulting dataset too small (len={len(prob_of_getting_zero)}). Skipping Qubit {q}.")
                 continue
 
-            state_prefix = self.file_address + f"State{prep_state}_"
+            error_rate = 1 - prob_of_getting_zero if prep_state == '0' else prob_of_getting_zero
+
+            log_error_rate = np.log(error_rate + 1e-6) # Log error with a very small addition to account for very unlikely errorless batches
+            state_prefix = os.path.join(self.file_address, "Posterior Data", f"State{prep_state}_")
             
             try:
-                prior_lambdas, post_lambdas = self.output(
-                    d, q, nPrior, self.params, prior_sd, 
-                    seed=seed, file_address=state_prefix, prep_state=prep_state
+                log_prior_errors, log_post_errors = self.logoutput(
+                    log_error_rate, q, nPrior, self.params, prior_sd, 
+                    seed=seed, State_Data_address=state_prefix, prep_state=prep_state
                 )                
-                self.prior[f'Qubit{q}'] = prior_lambdas
-                self.post_full[f'Qubit{q}'][prep_state] = post_lambdas
+                self.prior[f'Qubit{q}'] = np.exp(log_prior_errors)
+                self.post_full[f'Qubit{q}'][prep_state] = np.exp(log_post_errors)
             except Exception as e:
                 print(f"   Inference failed for Qubit {q}: {e}")
                 
@@ -633,40 +627,38 @@ class SplitMeasFilter:
         if has_0 and has_1:
             self.create_filter_mat()
 
-        if self.post_full[last_q]['0'].size > 0 and self.post_full[last_q]['1'].size > 0:
-            # Calculate stats
-            self.post = {f'Qubit{q}': {
-                'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 
-                'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
-                'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 
-                'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]),
-            } for q in self.qubit_order}
+        if has_0:
+            for q in self.qubit_order: self.post[f'Qubit{q}']['e0_mean'] = float(np.mean(self.post_full[f'Qubit{q}']['0']))
+            for q in self.qubit_order: self.post[f'Qubit{q}']['e0_mode'] = float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]) 
+        elif has_1:
+            for q in self.qubit_order: self.post[f'Qubit{q}']['e1_mean'] = float(np.mean(self.post_full[f'Qubit{q}']['1']))
+            for q in self.qubit_order: self.post[f'Qubit{q}']['e1_mode'] = float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]) 
 
-            print("Inference Complete, Saving Results...")
+        print("Inference Complete, Saving Results...")
 
-            # Update extensions to .json
-            full_path_datetime = os.path.join(self.file_address, f'Post_Full_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
-            full_path_current = os.path.join(self.file_address, 'Post_Full_Current.json')
-            meanmode_path_datetime = os.path.join(self.file_address, f'Post_MeanMode_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
-            meanmode_path_current = os.path.join(self.file_address, 'Post_MeanMode_Current.json')
+        # Update extensions to .json
+        full_path_datetime = os.path.join(self.file_address, f'Post_Full_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+        full_path_current = os.path.join(self.file_address, 'Post_Full_Current.json')
+        meanmode_path_datetime = os.path.join(self.file_address, f'Post_MeanMode_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+        meanmode_path_current = os.path.join(self.file_address, 'Post_MeanMode_Current.json')
 
-            # Save using the NumpyEncoder
-            with open(full_path_datetime, 'w') as f:
-                json.dump(self.post_full, f, cls=NumpyEncoder)
+        # Save using the NumpyEncoder
+        with open(full_path_datetime, 'w') as f:
+            json.dump(self.post_full, f, cls=NumpyEncoder)
 
-            with open(meanmode_path_datetime, 'w') as f:
-                json.dump(self.post, f, cls=NumpyEncoder)
+        with open(meanmode_path_datetime, 'w') as f:
+            json.dump(self.post, f, cls=NumpyEncoder)
 
-            with open(full_path_current, 'w') as f:
-                json.dump(self.post_full, f, cls=NumpyEncoder)
+        with open(full_path_current, 'w') as f:
+            json.dump(self.post_full, f, cls=NumpyEncoder)
 
-            with open(meanmode_path_current, 'w') as f:
-                json.dump(self.post, f, cls=NumpyEncoder)
+        with open(meanmode_path_current, 'w') as f:
+            json.dump(self.post, f, cls=NumpyEncoder)
 
-            print(f"Saved Full Posterior to:\n{full_path_datetime}\nand\n{full_path_current}")
-            print(f"Saved Mean/Mode Summary to:\n{meanmode_path_datetime}\nand\n{meanmode_path_current}")
-            
-            self.error_distributions(plotting=True, save_plots=True, num_points=num_points)
+        print(f"Saved Full Posterior to:\n{full_path_datetime}\nand\n{full_path_current}")
+        print(f"Saved Mean/Mode Summary to:\n{meanmode_path_datetime}\nand\n{meanmode_path_current}")
+        
+        self.error_distributions(plotting=True, save_plots=True, num_points=num_points)
 
     def create_filter_mat(self):
         self.inv_matrices_mean = []
@@ -984,58 +976,71 @@ class SplitMeasFilter:
             for idx,q in enumerate(self.qubit_order):
                 q_key = f'Qubit{q}'
                 
-                # 1. Retrieve Success Rates (Lambdas)
+                # Success Rates (Lambdas)
                 # These are samples of "Probability of measuring Correctly"
-                lam0_samples = self.post_full[q_key]['0']
-                lam1_samples = self.post_full[q_key]['1']
+                lam0_samples = self.post_full[q_key]['0'] if '0' in self.post_full[q_key] else np.array([])
+                lam1_samples = self.post_full[q_key]['1'] if '1' in self.post_full[q_key] else np.array([])
                 
-                if lam0_samples is None or lam1_samples is None:
+                if (not lam0_samples.any()) and (not lam1_samples):
                     print(f"Skipping Qubit {q}: Inference not complete.")
                     continue
+                elif (not lam0_samples.any()) or (not lam1_samples.any()):
+                    print("Partial Inference complete, continuing")
 
-                # 2. Convert to Error Rates (Epsilons)
+                # Convert to Error Rates (Epsilons)
                 # Error = 1 - Success
-                err0_samples = 1.0 - lam0_samples # Prob(Meas 1 | Prep 0)
-                err1_samples = 1.0 - lam1_samples # Prob(Meas 0 | Prep 1)
+                if lam0_samples.any():
+                    err0_samples = 1.0 - lam0_samples # Prob(Meas 1 | Prep 0)
+                else:
+                    err0_samples = np.array([])
+
+                if lam1_samples.any():
+                    err1_samples = 1.0 - lam1_samples # Prob(Meas 0 | Prep 1)
+                else:
+                    err1_samples = np.array([])
+
+                # Calculate Statistics
+                stats[q_key] = {}
+                if err0_samples.any():
+                    stats[q_key]['err0_mean'] = np.mean(err0_samples)
+                    stats[q_key]['err0_std'] = np.std(err0_samples)
+                    stats[q_key]['err0_95_CI'] = np.percentile(err0_samples, [2.5, 97.5])
+
+                if err1_samples.any():
+                    stats[q_key]['err1_mean'] = np.mean(err1_samples)
+                    stats[q_key]['err1_std'] = np.std(err1_samples)
+                    stats[q_key]['err1_95_CI'] = np.percentile(err1_samples, [2.5, 97.5])
                 
-                # 3. Calculate Statistics
-                stats[q_key] = {
-                    'err0_mean': np.mean(err0_samples),
-                    'err0_std': np.std(err0_samples),
-                    'err0_95_CI': np.percentile(err0_samples, [2.5, 97.5]),
-                    
-                    'err1_mean': np.mean(err1_samples),
-                    'err1_std': np.std(err1_samples),
-                    'err1_95_CI': np.percentile(err1_samples, [2.5, 97.5])
-                }
-                
-                # 4. Plotting (KDE + Histogram)
+                # Plotting (KDE + Histogram)
                 if plotting:
                     plt.figure(figsize=(8, 5), dpi=100)
                     xs = np.linspace(0, 0.1, 1000)
-                    # Plot Error 0 (Readout error on |0>)
-                    kde0 = ss.gaussian_kde(err0_samples)
-                    plt.plot(xs, kde0(xs), color='blue', label=r'$P(1|0)$ (Error on 0)')
-                    plt.fill_between(xs, kde0(xs), alpha=0.2, color='blue')
+                    
+                    if err0_samples.any():
+                        # Plot Error 0 (Readout error on |0>)
+                        kde0 = ss.gaussian_kde(err0_samples)
+                        plt.plot(xs, kde0(xs), color='blue', label=r'$P(1|0)$ (Error on 0)')
+                        plt.fill_between(xs, kde0(xs), alpha=0.2, color='blue')
 
-                    # Plot Data KDE for comparison
-                    d0 = getData0(self.data.get('0', np.array([])), num_points, idx)
-                    if len(d0) > 0:
-                        d0_ker = ss.gaussian_kde(d0)
-                        plt.plot(xs, d0_ker(1 - xs), color='darkslateblue', linestyle='--', label='Data KDE (State |0>)')
-                        plt.fill_between(xs, d0_ker(1 - xs), alpha=0.1, color='darkslateblue')
+                        # Plot Data KDE for comparison
+                        d0 = getData0(self.data.get('0', np.array([])), num_points, idx)
+                        if len(d0) > 0:
+                            d0_ker = ss.gaussian_kde(d0)
+                            plt.plot(xs, d0_ker(1 - xs), color='darkslateblue', linestyle='--', label='Data KDE (State |0>)')
+                            plt.fill_between(xs, d0_ker(1 - xs), alpha=0.1, color='darkslateblue')
 
-                    # Plot Error 1 (Readout error on |1>)
-                    kde1 = ss.gaussian_kde(err1_samples)
-                    plt.plot(xs, kde1(xs), color='red', label=r'$P(0|1)$ (Error on 1)')
-                    plt.fill_between(xs, kde1(xs), alpha=0.2, color='red')
+                    if err1_samples.any():
+                        # Plot Error 1 (Readout error on |1>)
+                        kde1 = ss.gaussian_kde(err1_samples)
+                        plt.plot(xs, kde1(xs), color='red', label=r'$P(0|1)$ (Error on 1)')
+                        plt.fill_between(xs, kde1(xs), alpha=0.2, color='red')
 
-                    # Plot Data KDE for comparison
-                    d1 = getData0(self.data.get('1', np.array([])), num_points, idx)
-                    if len(d1) > 0:
-                        d1_ker = ss.gaussian_kde(d1)
-                        plt.plot(xs, d1_ker(xs), color='firebrick', linestyle='--', label='Data KDE (State |1>)')
-                        plt.fill_between(xs, d1_ker(xs), alpha=0.1, color='firebrick')
+                        # Plot Data KDE for comparison
+                        d1 = getData0(self.data.get('1', np.array([])), num_points, idx)
+                        if len(d1) > 0:
+                            d1_ker = ss.gaussian_kde(d1)
+                            plt.plot(xs, d1_ker(xs), color='firebrick', linestyle='--', label='Data KDE (State |1>)')
+                            plt.fill_between(xs, d1_ker(xs), alpha=0.1, color='firebrick')
 
                     plt.title(f'Posterior Error Distributions - Qubit {q}')
                     plt.xlabel('Error Rate')
@@ -1051,10 +1056,12 @@ class SplitMeasFilter:
                     
                     # Print Summary
                     print(f"--- Qubit {q} Summary ---")
-                    print(f"Error on |0>: {stats[q_key]['err0_mean']:.4f} "
-                        f"(95% CI: {stats[q_key]['err0_95_CI'][0]:.4f} - {stats[q_key]['err0_95_CI'][1]:.4f})")
-                    print(f"Error on |1>: {stats[q_key]['err1_mean']:.4f} "
-                        f"(95% CI: {stats[q_key]['err1_95_CI'][0]:.4f} - {stats[q_key]['err1_95_CI'][1]:.4f})")
+                    if err0_samples.any():
+                        print(f"Error on |0>: {stats[q_key]['err0_mean']:.4f} "
+                            f"(95% CI: {stats[q_key]['err0_95_CI'][0]:.4f} - {stats[q_key]['err0_95_CI'][1]:.4f})")
+                    if err1_samples.any():
+                        print(f"Error on |1>: {stats[q_key]['err1_mean']:.4f} "
+                            f"(95% CI: {stats[q_key]['err1_95_CI'][0]:.4f} - {stats[q_key]['err1_95_CI'][1]:.4f})")
                     print("-" * 30)
 
             return stats
