@@ -31,7 +31,6 @@ width = 6.72
 height = 4.15 
 
 
-
 # --- Helper Functions ---
 
 class NumpyEncoder(json.JSONEncoder):
