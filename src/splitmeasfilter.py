@@ -217,57 +217,45 @@ def dq(x, qs_ker, d_ker):
     else:
         return np.inf
 
-def findM(qs_ker, d_ker, prep_state):
-    """ Find M that maximises the d/q ratio """
-    # if prep_state == '0':
-    #     x_scan = np.linspace(0, 1, 1000)
-    # elif prep_state == '1':
-    #     x_scan = np.linspace(0, 1, 1000)
-    # else:
-    x_scan = np.linspace(0, 0.1, 1000)
+def findM(qs_ker, d_ker):
+    """ Find M that maximises the d/q ratio for rejection sampling """
+    
+    # RECOMMENDED: Increase scan range. 0.1 is too narrow for high-error qubits.
+    x_scan = np.linspace(0, 0.5, 2000) 
     
     prior_density = qs_ker(x_scan)
     threshold = 0.01 * np.max(prior_density)
+    
+    # Get indices where prior is significant
     valid_indices = np.where(prior_density > threshold)[0]
     
     if len(valid_indices) > 1:
-        lower_bound = x_scan[valid_indices[0]]
-        upper_bound = x_scan[valid_indices[-1]]
-        bds = (lower_bound, upper_bound)
-    else:
-        bds = (0.0, 1.0) 
-
-    ys = np.array([dq(x, qs_ker, d_ker) for x in x_scan])
-    
-    # Safe argmin
-    if len(valid_indices) > 0:
-        valid_ys = ys[valid_indices]
-        valid_xs = x_scan[valid_indices]
-        x0 = valid_xs[np.argmin(valid_ys)]
-    else:
-        x0 = 0.5
-
-    # Run Optimizer
-    try:
-        res = minimize(dq, (x0,), args=(qs_ker, d_ker), bounds=(bds,), method='L-BFGS-B')
-        
-        # Plotting (Optional - can comment out for speed)
-        plt.figure(figsize=(width,height), dpi=100)
-        plt.plot(1 - x_scan, ys, c='crimson', lw=2)
-        plt.title("-Data/Prior PDFs")
+        # Calculate -Ratio
+        ys = np.array([dq(x_scan[i], qs_ker, d_ker) for i in valid_indices])
+        res = np.min(ys) # This is the most negative value (e.g., -50)
+        # Plot the rejection sampling diagnostic
+        plt.figure(figsize=(8, 5))
+        plt.plot(x_scan[valid_indices], ys, label='−d/q ratio', color='blue', alpha=0.7)
+        plt.axhline(res, color='red', linestyle='--', label='Threshold (1% of max)')
+        plt.xlabel('Error rate')
+        plt.title('Rejection Sampling Diagnostic, -data/prior')
+        plt.grid(True, alpha=0.3)
         plt.show()
         
-        return -res.fun[0] if isinstance(res.fun, np.ndarray) else -res.fun, res.x[0] if isinstance(res.x, np.ndarray) else res.x
-    except:
-        print("falling back")
-        return 1.0, x0 # Fallback
+        plt.figure(figsize=(8, 5))
+        plt.plot(x_scan, prior_density, label='Prior density', color='red', alpha=0.7)
+        plt.xlabel('Error rate')
+        plt.title('Prior Distribution')
+        plt.grid(True, alpha=0.3)
+        plt.show()
 
-def QoI_single(lambdas, prep_state='0'):
-    if prep_state == '0':
-        return lambdas 
-    elif prep_state == '1':
-        return 1.0 - lambdas
-    return lambdas
+    else:
+        raise Exception
+
+
+    
+    # FIX IS HERE: Return the positive magnitude (e.g., 50)
+    return -res
 
 def meas_data_readout(qubit, prep_state, datafile: str = ''):
     """
@@ -437,60 +425,59 @@ class SplitMeasFilter:
         try:
             if self.params:
                 if prep_state == '0':
-                    prior_mean = 1.0 - params[f'Qubit{qubit}'].get('err0', 0.05)
+                    prior_mean = params[f'Qubit{qubit}'].get('err0', 0.05)
                 else:
-                    prior_mean = 1.0 - params[f'Qubit{qubit}'].get('err1', 0.05)
+                    prior_mean = params[f'Qubit{qubit}'].get('err1', 0.05)
             else:
-                prior_mean = 1.0 - meas_data_readout(qubit=qubit, prep_state=prep_state, datafile=os.path.join(self.file_address, 'Braket_Qubit_Calibration.json'))
+                prior_mean = meas_data_readout(qubit=qubit, prep_state=prep_state, datafile=os.path.join(self.file_address, 'Braket_Qubit_Calibration.json'))
+                print(f"From the Braket Calibration, we have a prior error rate of: {prior_mean}")
         except Exception as e:
             print("Either didn't provide 'params = {...}' (not recommended)\n" 
                   f"and no file named {os.path.join(self.file_address, 'Braket_Qubit_Calibration.json')} located in the {self.file_address} directory: {e}")
-            prior_mean = 0.95
+            prior_mean = 0.05
             
 
-        if prior_mean > 1.0 or prior_mean < 0.7: prior_mean = 0.95
         # Generate Priors (Success Rates)
-        prob_meas_0 = tnorm01(prior_mean, prior_sd, size=M)
-        # Map to Observable
+        prior_error_rates = tnorm01(prior_mean, prior_sd, size=M)
+        qs = prior_error_rates
+
         if prep_state == '0':
-            success_rates = prob_meas_0
-        elif prep_state == '1':
-            success_rates = 1.0 - prob_meas_0
+            data_errors = 1 - d
         else:
-            raise ValueError('prep_state must be "0" or "1".')
-        qs = QoI_single(success_rates, prep_state=prep_state)
-        # KDE (Protected)
+            data_errors = d
         try:
-            d_ker = ss.gaussian_kde(d)
+            d_ker = ss.gaussian_kde(data_errors)
             qs_ker = ss.gaussian_kde(qs)
         except Exception as e:
             print(f"   KDE Failed (Data likely singular): {e}")
             # Fallback: Return original priors if we can't update them
-            return success_rates, success_rates
+            return prior_error_rates, prior_error_rates
 
-        print(f'Given Lambda |{prep_state}>: prior success rate = {prior_mean:.4f}')
+        print(f'Given Lambda |{prep_state}>: prior error rate = {prior_mean:.4f}')
 
         # Optimization
-        max_r, max_q = findM(qs_ker, d_ker, prep_state)
+        max_r = findM(qs_ker, d_ker)
 
         # Rejection Sampling
         r_vals = d_ker(qs) / qs_ker(qs)
         eta = r_vals / max_r 
         accept_mask = eta > np.random.uniform(0, 1, M)
-        post_success_rates = success_rates[accept_mask]
+        post_error_rates = prior_error_rates[accept_mask]
 
         # Handle case where rejection sampling rejects everything
-        if len(post_success_rates) == 0:
+        if len(post_error_rates) == 0:
             print("   Warning: Rejection sampling rejected all points. Returning priors.")
-            return success_rates, success_rates
+            return prior_error_rates, prior_error_rates
 
-        print('   Accepted N: %d (%.1f%%)' % (len(post_success_rates), 100*len(post_success_rates)/M))
+        print('   Accepted N: %d (%.1f%%)' % (len(post_error_rates), 100*len(post_error_rates)/M))
         
+
+
         # Save
         filename = State_Data_address + f'Post_Qubit{qubit}.csv'
-        np.savetxt(filename, post_success_rates, delimiter=',')
+        np.savetxt(filename, post_error_rates, delimiter=',')
 
-        return success_rates, post_success_rates
+        return prior_error_rates, post_error_rates
 
     def _load_posterior_marginals(self):
         for prep_state in ['0', '1']:
@@ -1022,8 +1009,9 @@ class SplitMeasFilter:
 
                         # Plot Data KDE for comparison
                         d0 = getData0(self.data.get('0', np.array([])), num_points, idx)
+                        err0 = 1 - d0
                         if len(d0) > 0:
-                            d0_ker = ss.gaussian_kde(d0)
+                            d0_ker = ss.gaussian_kde(err0)
                             plt.plot(xs, d0_ker(xs), color='darkslateblue', linestyle='--', label='Data KDE (State |0>)')
                             plt.fill_between(xs, d0_ker(xs), alpha=0.1, color='darkslateblue')
 
@@ -1035,8 +1023,9 @@ class SplitMeasFilter:
 
                         # Plot Data KDE for comparison
                         d1 = getData0(self.data.get('1', np.array([])), num_points, idx)
+                        err1 = d1
                         if len(d1) > 0:
-                            d1_ker = ss.gaussian_kde(d1)
+                            d1_ker = ss.gaussian_kde(err1)
                             plt.plot(xs, d1_ker(xs), color='firebrick', linestyle='--', label='Data KDE (State |1>)')
                             plt.fill_between(xs, d1_ker(xs), alpha=0.1, color='firebrick')
 
