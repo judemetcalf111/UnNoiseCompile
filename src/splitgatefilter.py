@@ -6,7 +6,6 @@ Created on Wed Dec 31 15:13:15 2025
 """
 
 # Numerical/Stats pack
-import csv
 import pandas as pd
 import numpy as np
 import json
@@ -17,7 +16,8 @@ from collections import defaultdict
 
 import src.splitmeasfilter
 import importlib
-importlib.reload(src.splitmeasfilter)
+importlib.reload(src.splitmeasfilter) # what?
+from pathlib import Path
 from src.splitmeasfilter import *
 from src.splitmeasfilter import NumpyEncoder
 
@@ -87,7 +87,7 @@ def closest_average(post_lambdas):
 ######################## For Parameter Characterzation ########################
 
 # used to call QoI
-def QoI_gate(prior_lambdas: np.ndarray, gate_type, gate_num):
+def QoI_to_noised_errors(data_obs: np.ndarray, prior_errors: np.ndarray, gate_type, gate_num):
     """
     Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
 
@@ -108,12 +108,12 @@ def QoI_gate(prior_lambdas: np.ndarray, gate_type, gate_num):
         prior lambdas in prior_lambdas.
 
     """
-    num_samples = prior_lambdas.shape[0]
+    num_samples = prior_errors.shape[0]
     
-    gates = ['RY', 'RX', 'RZ', 'CZ']
+    gates = ['RY', 'RX', 'RZ', 'CZ', 'X', 'Y']
     ideal_p0 = None
     
-    if (gate_type == 'X') or (gate_type == 'RX') or (gate_type == 'CZ') or (gate_type == 'RY'):
+    if (gate_type == 'X') or (gate_type == 'RX') or (gate_type == 'CZ') or (gate_type == 'RY') or (gate_type == 'RY'):
         if (gate_num % 2 == 0):
             ideal_p0 = 1
         elif (gate_num % 2 == 1):
@@ -124,7 +124,7 @@ def QoI_gate(prior_lambdas: np.ndarray, gate_type, gate_num):
         raise Exception(f"Gate Type {gate_type} not recognised, recognised gates are: {gates}")
 
     # We extract the gate error column (index 2)
-    ep = prior_lambdas[:, 2]
+    ep = np.array(prior_errors[:, 2])
     
     # Calculate noisy_p0 for all samples at once using vectorised numpy array arithmetic
     # Formula: p(cumulative flip) = (1 +/- (1-2e)^N)/2
@@ -135,18 +135,17 @@ def QoI_gate(prior_lambdas: np.ndarray, gate_type, gate_num):
     elif ideal_p0 == 1:
         noisy_p0 = (1 + decay_factor) / 2
     else:
-        raise Exception("p0 was neither a '0' value or a '1' value. There should only be native gates in the circuit.")
+        raise Exception("p0 was neither a '0' value or a '1' value. There should only be full (i.e. pi rotation) native gates in the circuit which act either as identity or an X-gate.")
 
-        
     noisy_p1 = 1 - noisy_p0
 
     # Stack into shape (N, 2, 1) -> [[p0], [p1]] for efficient matrix multiplication
     M_ideal = np.stack([noisy_p0, noisy_p1], axis=1)[..., np.newaxis]
 
-    # Vectorised Forward noising place of previous errMitMat()
+    # Vectorised Forward noising place of previous 
 
-    pm0p0 = prior_lambdas[:, 0]
-    pm1p1 = prior_lambdas[:, 1]
+    pm0p0 = 1 - np.array(prior_errors[:, 0])
+    pm1p1 = 1 - np.array(prior_errors[:, 1])
 
     A_batch = np.zeros((num_samples, 2, 2))
 
@@ -162,8 +161,19 @@ def QoI_gate(prior_lambdas: np.ndarray, gate_type, gate_num):
     
     # The result is the Probability of Measuring 0 (First component)
     qs = M_observed[:, 0, 0]
+
+    if ideal_p0 == 0:
+        data_errors = 1 - data_obs
+        prior_noised_error = 1 - qs
+    elif ideal_p0 == 1:
+        data_errors = data_obs
+        prior_noised_error = 1 - qs
+    else:
+        print(f"Error in calculating ideal_p0: {ideal_p0}\n"
+              "Returning p0s")
+        return data_obs, qs
     
-    return qs
+    return data_errors, prior_noised_error
 
 def data_readout(qubit, datafile: str = '', data: np.ndarray = np.array([])):
     """
@@ -220,42 +230,6 @@ def read_data(interested_circuit, gate_type, gate_num, file_address=''):
     data_array = np.loadtxt(circuit_location, dtype=float, delimiter=',')
 
     return data_array
-
-def plotComparsion(data, post_lambdas, q, file_address=''):
-    """
-        Plot comparision between BJW bayesian and standard bayesian.
-        For writing paper only.
-
-    """
-    postSB = pd.read_csv(file_address +
-                         'StandPostQubit{}.csv'.format(q)).to_numpy()
-    SB = QoI_gate(postSB, 1, 200)
-    OB = QoI_gate(post_lambdas, 1, 200)
-    minSB = min(SB) 
-    minOB = min(OB)
-    maxSB = max(SB)
-    maxOB = max(OB)
-    line = np.linspace(min(minSB, minOB), max(maxSB, maxOB), 1000)
-    SBker = ss.gaussian_kde(SB)
-    OBker = ss.gaussian_kde(OB)
-    dker = ss.gaussian_kde(data)
-    
-    # figure(num=None, figsize=fig_size, dpi=fig_dpi, facecolor='w', edgecolor='k')
-    plt.figure(figsize=(width,height), dpi=120, facecolor='white')
-    plt.plot(line, SBker(line), color='Green', linewidth=2, label='Stand.')
-    plt.plot(line, OBker(line), color='Blue', linewidth=2, label='Cons.')
-    plt.plot(line,
-             dker(line),
-             color='Red',
-             linestyle='dashed',
-             linewidth=4,
-             label='Data')
-    plt.xlabel('Pr(Meas. 0)')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(file_address + 'SBOB-Qubit%g.pdf' % q)
-    plt.show()
 
 
 ########################## Class for Error Filtering ########################
@@ -341,9 +315,6 @@ class SplitGateFilter:
             json.dump(self.post_full, f, cls=NumpyEncoder, indent=4)
 
     def load_informed_json(self):
-        import json
-        from pathlib import Path
-
         # Assuming meas_cal_dir is a string, convert it to a Path object
         file_path = Path(self.meas_cal_dir) / 'Post_Full_Current.json'
         
@@ -352,7 +323,7 @@ class SplitGateFilter:
                 try:
                     with open(file_path, 'r') as f:
                         calibration_data = json.load(f)
-                        print(f"{file_path} File loaded successfully!")
+                        print(f"{file_path} Calibration file loaded successfully!")
                         # 'data' now contains your JSON object (dict or list)
                     
                     self.meas_prior = calibration_data
@@ -369,15 +340,15 @@ class SplitGateFilter:
             print("Measurement error priors already loaded")
             
 
-    def load_informed_priors(self, qubit_idx, n_samples, seed):
+    def load_informed_priors(self, qubit_identity, n_samples, seed):
         """
         Loads measurement posteriors from splitmeasfilter files and resamples them.
         Returns columns for P(meas 0|prep 0) and P(meas 1|prep 1).
         """
 
         try:
-            post_0 = self.meas_prior[f"Qubit{qubit_idx}"]['0']
-            post_1 = self.meas_prior[f"Qubit{qubit_idx}"]['1']
+            post_0 = self.meas_prior[f"Qubit{qubit_identity}"]['0']
+            post_1 = self.meas_prior[f"Qubit{qubit_identity}"]['1']
             
             # Create KDEs
             kde_0 = ss.gaussian_kde(post_0)
@@ -395,18 +366,18 @@ class SplitGateFilter:
             return col_0, col_1
         
         except (FileNotFoundError, IOError):
-            print(f"Warning: Measurement calibration not found for Q{qubit_idx} at {self.meas_cal_dir}")
+            print(f"Warning: Measurement calibration not found for Qubit{qubit_identity} in {self.meas_cal_dir}")
             return None, None
 
     def inference(self,
                   qubit_order,
-                  qubit_couplings,
                   gate_type,
                   gate_num,
                   num_points,
                   interested_circuits=[],
+                  qubit_couplings=[],
                   nPrior=40000,
-                  meas_sd=0.04,
+                  meas_sd=0.05,
                   gate_sd=0.1,
                   seed=127,
                   use_informed_priors=True,
@@ -444,14 +415,24 @@ class SplitGateFilter:
 
         """
 
+        num_circuits = len(qubit_couplings)
+
+        # if the interested_circuits parameter representing the location isn't given
         if not interested_circuits:
-            interested_circuits = qubit_couplings
+            interested_circuits = list(range(1,num_circuits+1))
+            print(f"Since `interested_circuits` isn't provided, using an integer array of the length of qubit_couplings: interested_circuits={interested_circuits}\n"
+                  "NOTE: best practise is to provide the names of the files in the correct order alongwith `qubit_couplings` here to ensure that the correct data is located\n" \
+                  "----- if testing single qubit gates, provide the name of the data file as `interested_circuits` as a singleton array.")
         
         self.load_informed_json()
 
         for circuit_number,interested_circuit in enumerate(interested_circuits):
+            
+            if (qubit_couplings) and (gate_type in ['CZ', 'iSWAP', 'CNOT']):
+                qubit_coupling_set = qubit_couplings[circuit_number]
+            else:
+                qubit_coupling_set = None
 
-            qubit_coupling_set = qubit_couplings[circuit_number]
             print(f"Beginning Inference Run. Circuit index used: {circuit_number}.")
             # Loop over Qubits
 
@@ -460,7 +441,7 @@ class SplitGateFilter:
 
                 # Determine a 'coupling key' to correspond to whether we have 2-qubit gate or not
                 qubit_couple_key = "Single"
-                if gate_type in ['CZ', 'iSWAP', 'CNOT']:
+                if gate_type in ['CZ', 'iSWAP', 'CNOT'] and qubit_coupling_set:
                     # Find which pair in the corresponding set in qubit_couplings contains q
                     found = False
                     for pair in qubit_coupling_set:
@@ -475,63 +456,63 @@ class SplitGateFilter:
                 raw_data = read_data(interested_circuit, gate_type, gate_num, 
                                     file_address=self.data_file_address)
                 
-                # Calculate QoI (Probability of Measuring 0)
-                d_obs = getData0(raw_data, num_points, idx)
+                # Calculate the probability of measuring 0
+                d_obs = getData0(raw_data, idx)
                 
                 # Construct Prior Matrix [M x 3]
-                prior_lambdas = np.zeros((nPrior, 3))
+                prior_errors = np.zeros((nPrior, 3))
                 
                 # --- Measurement Error Columns (p(0|0) & p(1|1)) ---
                 loaded_priors = False
                 if use_informed_priors:
                     p0_col, p1_col = self.load_informed_priors(q, nPrior, seed)
-                    if p0_col is not None:
-                        prior_lambdas[:, 0] = p0_col
-                        prior_lambdas[:, 1] = p1_col
+                    if (p0_col is not None) and (p1_col is not None):
+                        prior_errors[:, 0] = p0_col
+                        prior_errors[:, 1] = p1_col
                         loaded_priors = True
                         print(f"-> Successfully injected informed measurement priors.")
 
-                if not loaded_priors:
-                    # Fallback to Uninformed (Gaussian around calibration/default)
-                    print(f'-> Using uninformed Gaussian priors for measurement at all Qubits. 5% error assumed for all!')
-                    prior_lambdas[:, 0] = tnorm01(0.95, meas_sd, size=nPrior) # Default 5% error
-                    prior_lambdas[:, 1] = tnorm01(0.95, meas_sd, size=nPrior)
 
                 # --- Gate Error {Column (2)} ---
                 # We always generate this using the calibration data as an uncertain prior
                 # Retrieve calibration center (i.e. mean) using existing data_readout()
                 try:
                     datafile = os.path.join(self.meas_cal_dir,'Braket_Qubit_Calibration.json')
-                    print(datafile)
                     cal_data = data_readout(q, datafile=datafile)
-                    print(cal_data)
                     gate_center = cal_data[2] # 3rd element is gate error
                     if not loaded_priors:
-                        prior_lambdas[:, 0] = tnorm01(cal_data[0], meas_sd, size=nPrior) # Using calibrated priors based on AWS calibration
-                        prior_lambdas[:, 1] = tnorm01(cal_data[1], meas_sd, size=nPrior)
-                        print(f"Calibrated prior measurement error rates from AWS:\n"
-                            f"err0={cal_data[0]:.2}, err1={cal_data[1]:.2}\n"
-                            f"Standard Deviation of each is std={meas_sd}")
+                        try:
+                            prior_errors[:, 0] = tnorm01(cal_data[0], meas_sd, size=nPrior) # Using calibrated priors based on AWS calibration
+                            prior_errors[:, 1] = tnorm01(cal_data[1], meas_sd, size=nPrior)
+                            print(f"Failed to load precise informative priors, Calibrated prior measurement error rates from AWS:\n"
+                                f"err0={cal_data[0]:.2}, err1={cal_data[1]:.2}\n"
+                                f"Standard Deviation of each is std={meas_sd}")                            
+                        except Exception as e:
+                                # Fallback to Uninformed (Gaussian around calibration/default)
+                                print(f'-> Using uninformed Gaussian priors for measurement. 5% error assumed for Qubit{q}: {e}')
+                                prior_errors[:, 0] = tnorm01(0.05, meas_sd, size=nPrior) # Default 5% error
+                                prior_errors[:, 1] = tnorm01(0.05, meas_sd, size=nPrior)
                     else:
                         pass
+
                 except:
                     gate_center = 0.1 # Broad and poor default
                     print(f"Warning: Could not read calibration data for gate error on Qubit{q}.\n"
                           "Ensure that the Braket Calibration .json file is location in the SplitGateFilter.meas_cal_dir folder and named 'Braket_Qubit_Calibration.json'\n"
                           f"Using default calibration value: {gate_center}.")
                 
-                prior_lambdas[:, 2] = tnorm01(gate_center, gate_sd, size=nPrior)
+                prior_errors[:, 2] = tnorm01(gate_center, gate_sd, size=nPrior)
 
                 ### Run Rejection Sampling ###
 
                 # Calculate Densities
-                d_ker = ss.gaussian_kde(d_obs)
-                qs = QoI_gate(prior_lambdas, gate_type, gate_num)
+                data_errors, qs = QoI_to_noised_errors(d_obs, prior_errors, gate_type, gate_num)
+                d_ker = ss.gaussian_kde(data_errors)
                 qs_ker = ss.gaussian_kde(qs)
                 
                 # Find Maximum Ratio (Optimization)
                 # Uses existing helper findM
-                max_r, max_q = findM(qs_ker, d_ker, prep_state='0') # Gate exp usually targets 0 or 1, check logic
+                max_r, max_q = findM(qs_ker, d_ker) # Gate exp usually targets 0 or 1, check logic
 
                 print('Final Accepted Posterior Lambdas')
                 print('M: %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
@@ -541,44 +522,59 @@ class SplitGateFilter:
                 r_vals = d_ker(qs) / qs_ker(qs)
                 eta = r_vals / max_r
                 accept_mask = eta > np.random.uniform(0, 1, nPrior)
-                post_lambdas = prior_lambdas[accept_mask]
-                post_err0 = post_lambdas[:,0]
-                post_err1 = post_lambdas[:,1]
-                post_gaterr = post_lambdas[:,2]
+                post_errors = prior_errors[accept_mask]
+                post_err0 = post_errors[:,0]
+                post_err1 = post_errors[:,1]
+                post_gaterr = post_errors[:,2]
                 
-                # 5. UPDATE DICTIONARY (THE JSON STRUCTURE)
+                # Initialise the post dictionaries, including the key to store the qubit data
                 q_key = f"Qubit{q}"
                 if q_key not in self.post_full: self.post_full[q_key] = {}
                 if gate_type not in self.post_full[q_key]: self.post_full[q_key][gate_type] = {}
                 if q_key not in self.post: self.post[q_key] = {}
                 if gate_type not in self.post[q_key]: self.post[q_key][gate_type] = {}
                 
+
                 # We store the samples in the post jsons
-                self.post_full[q_key][gate_type][qubit_couple_key] = {'FULL_GATE_ERROR': post_gaterr,
-                                                                      'FULL_MEAS0_ERROR': post_err0,
-                                                                      'FULL_MEAS1_ERROR': post_err1}
-                self.post[q_key][gate_type][qubit_couple_key] = {'GATE_ERROR_MEAN': float(np.mean(post_gaterr)),
-                                                                'GATE_ERROR_MODE': float(ss.mode(post_gaterr)[0]),
-                                                                'MEAS0_ERR_MEAN': float(np.mean(post_err0)),
-                                                                'MEAS0_ERR_MODE': float(ss.mode(post_err0)[0]),
-                                                                'MEAS1_ERR_MEAN': float(np.mean(post_err1)),
-                                                                'MEAS1_ERR_MODE': float(ss.mode(post_err1)[0])}
+                # Store with the coupling_key, denotating which connection is tested, otherwise just store as a dict:
+
+                if qubit_couple_key is not 'Single':
+                    self.post_full[q_key][gate_type] = {'FULL_GATE_ERROR': post_gaterr,
+                        'FULL_MEAS0_ERROR': post_err0,
+                        'FULL_MEAS1_ERROR': post_err1}
+                    
+                    self.post[q_key][gate_type] = {'GATE_ERROR_MEAN': float(np.mean(post_gaterr)),
+                        'GATE_ERROR_MODE': float(ss.mode(post_gaterr)[0]),
+                        'MEAS0_ERR_MEAN': float(np.mean(post_err0)),
+                        'MEAS0_ERR_MODE': float(ss.mode(post_err0)[0]),
+                        'MEAS1_ERR_MEAN': float(np.mean(post_err1)),
+                        'MEAS1_ERR_MODE': float(ss.mode(post_err1)[0])}
+                else:
+                    self.post_full[q_key][gate_type][qubit_couple_key] = {'FULL_GATE_ERROR': post_gaterr,
+                        'FULL_MEAS0_ERROR': post_err0,
+                        'FULL_MEAS1_ERROR': post_err1}
+                    self.post[q_key][gate_type][qubit_couple_key] = {'GATE_ERROR_MEAN': float(np.mean(post_gaterr)),
+                        'GATE_ERROR_MODE': float(ss.mode(post_gaterr)[0]),
+                        'MEAS0_ERR_MEAN': float(np.mean(post_err0)),
+                        'MEAS0_ERR_MODE': float(ss.mode(post_err0)[0]),
+                        'MEAS1_ERR_MEAN': float(np.mean(post_err1)),
+                        'MEAS1_ERR_MODE': float(ss.mode(post_err1)[0])}
+                    
                 
-                print(f"-> Inferred {len(post_lambdas)} samples for Qubit{q_key} ({qubit_couple_key})")
+                print(f"-> Inferred {len(post_errors)} samples for Qubit{q_key} ({qubit_couple_key})")
 
                 if plotting:
-                    post_qs = QoI_gate(post_lambdas, gate_type, gate_num) 
+                    data_errors, post_qs = QoI_to_noised_errors(d_obs, post_errors, gate_type, gate_num) 
                     post_ker = ss.gaussian_kde(post_qs)
 
                     # Integration for validation (Riemann Sum)
                     xs = np.linspace(0, 1, 1000)
-                    xsd = np.linspace(0.1, 0.9, 1000)
-                    
+
                     # Vectorised integration calculation 
                     q_eval = xs[:-1]
                     pdf_vals = qs_ker(q_eval)
                     # Avoid division by zero if pdf is 0
-                    valid_indices = pdf_vals > 0
+                    valid_indices = pdf_vals > 1e-12
                     
                     r_int = np.zeros_like(q_eval)
                     r_int[valid_indices] = d_ker(q_eval[valid_indices]) / pdf_vals[valid_indices]
@@ -587,12 +583,12 @@ class SplitGateFilter:
                     I = np.sum(r_int * pdf_vals * delta_x)
 
                     print('Accepted Number N: %d, fraction %.3f' %
-                        (post_lambdas.shape[0], post_lambdas.shape[0] / nPrior))
+                        (post_errors.shape[0], post_errors.shape[0] / nPrior))
                     print('I(pi^post_Lambda) = %.5g' % I)
                     
                     # Assuming closest_average and closest_mode are defined externally
-                    print('Posterior Lambda Mean', closest_average(post_lambdas))
-                    print('Posterior Lambda Mode', closest_mode(post_lambdas))
+                    print('Posterior Lambda Mean', closest_average(post_errors))
+                    print('Posterior Lambda Mode', closest_mode(post_errors))
 
                     print('0 to 1: KL-Div(pi_D^Q(post),pi_D^obs) = %6g' %
                         (ss.entropy(post_ker(xs), d_ker(xs))))
@@ -602,6 +598,7 @@ class SplitGateFilter:
                     # Defining matplotlib width and height here as in the preamble for clarity
                     width, height = 10, 6 
                     
+                    xsd = np.linspace(0,0.2,2000)
                     plt.figure(figsize=(width, height), dpi=120, facecolor='white')
                     plt.plot(xsd, d_ker(xsd), color='Red', linestyle='dashed', linewidth=3, label=r'$\pi^{\mathrm{obs}}_{\mathcal{D}}$')
                     plt.plot(xsd, post_ker(xsd), color='Blue', label=r'$\pi_{\mathcal{D}}^{Q(\mathrm{post})}$')
@@ -613,7 +610,7 @@ class SplitGateFilter:
                     plt.show()
                     
                     plt.figure(figsize=(width, height), dpi=100, facecolor='white')
-                    eps_vals = post_lambdas[:, 2]
+                    eps_vals = post_errors[:, 2]
                     eps_ker = ss.gaussian_kde(eps_vals)
                     eps_line = np.linspace(np.min(eps_vals), np.max(eps_vals), 1000)
                     
