@@ -14,7 +14,6 @@ import scipy.stats as ss
 import numpy.linalg as nl
 from collections import defaultdict
 # For optimization
-from cvxopt import matrix, solvers
 
 import src.splitmeasfilter
 import importlib
