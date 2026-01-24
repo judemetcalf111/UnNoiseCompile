@@ -373,7 +373,6 @@ class SplitGateFilter:
                   qubit_order,
                   gate_type,
                   gate_num,
-                  num_points,
                   interested_circuits=[],
                   qubit_couplings=[],
                   nPrior=40000,
