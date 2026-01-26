@@ -1,18 +1,20 @@
-# -*- coding: utf-8 -*-
 """
 Created on Wed Dec 31 13:18:38 2025
 
 @author: Jude L. Metcalf
 """
+
+# Imports
 from datetime import datetime
 import json
 import os
 from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import scipy.stats as ss
-import numpy.linalg as nl
 from scipy.optimize import minimize
+
 import matplotlib.pyplot as plt
 from aquarel import load_theme
 
@@ -25,12 +27,9 @@ try:
 except:
     pass
 
-width = 6.72 
-height = 4.15 
-
 
 # --- Helper Functions ---
-
+# Helper Class to encode numpy objects as standard python objects (i.e. lists, floats, ints)
 class NumpyEncoder(json.JSONEncoder):
     def default(self, o):
         if isinstance(o, np.ndarray):
@@ -41,27 +40,27 @@ class NumpyEncoder(json.JSONEncoder):
             return float(o)
         return super(NumpyEncoder, self).default(o)
 
-def tnorm01(center, sd, size=1):
-    """ Generate random numbers for truncated normal with range [0,1]
+def tnorm01(center:float, sd:float, size:int=1) -> np.ndarray:
+    """Generate random numbers for truncated normal with range [0,1]
 
     Args:
-      center: float
+      center:float
         mean of normal distribution
-      sd: float
+      sd:float
         standard deviation of normal distribution
-      size: int
+      size:int
         number of random numbers
 
-    Returns: array
+    Returns: np.ndarray
        an array of random numbers
     """ 
-    upper = 1
-    lower = 0
+    upper = 1.
+    lower = 0.
     if sd == 0: return np.full(size, center)
     a, b = (lower - center) / sd, (upper - center) / sd
-    return ss.truncnorm.rvs(a, b, size=size) * sd + center
+    return np.array(ss.truncnorm.rvs(a, b, size=size) * sd + center)
 
-def find_mode(data):
+def find_mode(data:np.ndarray) -> float:
     """Find the mode through Gaussian KDE.
 
     Args:
@@ -69,111 +68,68 @@ def find_mode(data):
         an array of floats
 
     Returns: float
-      the mode.
+      the mode
     """
-    if len(data) < 2: return np.mean(data)
+    if len(data) < 2: return float(np.mean(data))
     kde = ss.gaussian_kde(data)
     line = np.linspace(min(data), max(data), 1000)
     return line[np.argmax(kde(line))]
 
-def safe_mean(data) -> float:
+def safe_mean(data:np.ndarray) -> float:
     """ Safely compute the mean, returning 0.0 if empty to avoid crashes. """
     if len(data) == 0: return 0.0
     return float(np.mean(data))
 
-def dictToVec(nQubits, counts):
-    """ Transfer counts to vec
+def dict_filter(data_dict:dict, percent:float = 99.0) -> dict:
+    """Filters a dictionary to retain entries that make up the top x% of total counts, the default set to 99%.
+    Built to ensure scalability, as this will only track at most N
 
     Args:
-      nQUbits: int
-        number of qubits
-      counts: dict
-        an dictionary in the form {basis string: frequency}. E.g.
-        {"01": 100
-         "11": 100}
-        dict key follow little-endian convention
-
-    Returns: numpy array
-      an probability vector (array). E.g.
-      [0, 100, 0, 100] is the result from example above.
-    """
-    vec = np.zeros(2**nQubits)
-    form = "{0:0" + str(nQubits) + "b}"
-    for i in range(2**nQubits):
-        key = form.format(i) 
-        if key in counts:
-            vec[i] = int(counts[key])
-    return vec
-
-def vecToDict(nQubits, shots, vec):
-    """ Transfer probability vector to dict in the form 
-        {basis string: frequency}. E.g. [0, 0.5, 0, 0.5] in 200 shots becomes
-            {"01": 100
-             "11": 100}
-        dict key follow little-endian convention
-
-    Parameters
-    ----------
-    nQubits : int
-        number of qubits.
-    shots : int
-        number of shots.
-    vec : array
-        probability vector that sums to 1.
-
-    Returns
-    -------
-    counts : dict
-        Counts for each basis.
-
-    """
-    counts = {}
-    form = "{0:0" + str(nQubits) + "b}"
-    for i in range(2**nQubits):
-        key = form.format(i)
-        counts[key] = int(vec[i] * shots)
-    return counts
-
-def dict_filter(data_dict: dict, percent: float = 99.0) -> dict:
-    """
-    Filters a dictionary to retain entries that make up the top x% of total counts, the default set to 99%.
-
-    Args:
-        data_dict (dict): The input dictionary with counts.
-        percent (float): The percentage (0-100) threshold to retain (default is 99).
+        data_dict: dict
+            The input dictionary with counts.
+        percent: float
+            The percentage (0-100) threshold to retain (default is 99).
 
     Returns:
         dict: A new dictionary containing only the top 99% of entries.
     """
+    # Create sum of entries to get total shot count
     total_sum = sum(data_dict.values())
     if total_sum == 0: return {}
+
+    # Sort items into array of tuple pairs ordered by values [('00',102),('11',90),...]
     sorted_items = sorted(data_dict.items(), key=lambda item: item[1], reverse=True)
     filtered_dict = {}
     cumulative_sum = 0
-    if percent > 1.0: percent /= 100.0
+
+    # Allow percentage range and [0-1] range
+    if percent > 1.0: percent /= 100.0; print(f"'percent' interpreted as a [0-1] value, taken as {percent:.2g}%")
     threshold = percent * total_sum
     for key, value in sorted_items:
         if cumulative_sum < threshold:
             filtered_dict[key] = value
             cumulative_sum += value
         else:
+            # If we reach more than the threshold, break, in order to remain scalable and only track the top x percentage of 
             break
     return filtered_dict
 
-def getData0(data, interested_qubit_index):
-    """ Get the probabilities of measuring 0 from binary readouts
+def getData0(data:np.ndarray, interested_qubit_index:int) -> float:
+    """Get the probabilities of measuring 0 from bitstring measurements
 
     Parameters
     ----------
-    data : array_like
-        An array of binary readout strings (e.g., ['001', '010']).
+    data : np.ndarray
+        A 2D array of the bitstrings, columns defining qubit number, rows defining shot
+          (e.g., [0 0
+                  1 2]).
     interested_qubit_index : int
-        The index of the qubit to analyze (0-indexed).
+        The index of the qubit to analyze (different from Qubit number, defined by measurement order).
 
     Returns
     -------
-    prob0 : numpy array
-        Array of probabilities of measuring 0 for each group.
+    prob0 : float
+        float of the probability of measuring 0 for each group, in range [0,1].
 
     """
     target_idx = interested_qubit_index
@@ -181,28 +137,31 @@ def getData0(data, interested_qubit_index):
     # Fallback if qubit index out of bounds
     if target_idx < 0: target_idx = 0 
 
-    data_list = data[:,interested_qubit_index]
+    try:
+        data_list = data[:,interested_qubit_index]
+    except Exception as ex:
+        raise(ex)
 
     mean_of_entries = np.mean(data_list)
 
-    prob0 = 1 - mean_of_entries
+    prob0 = float(1 - mean_of_entries)
     
     return prob0
 
 def dq(x, qs_ker, d_ker):
+    """Calculates the ratio of the prior pdf to the data kernel safely at some point 'x'"""
     if np.abs(qs_ker(x)[0]) > 1e-6 and np.abs(d_ker(x)) > 1e-6:
         return - d_ker(x) / qs_ker(x)[0]
     else:
         return np.inf
 
 def findM(qs_ker, d_ker):
-    """ Find M that maximises the d/q ratio for rejection sampling """
+    """Find M that maximises the d/q ratio for rejection sampling """
     
     # Find the min value in log-space (thus negative)
     x_scan = np.linspace(0, 0.1, 4000) 
     
     prior_density = qs_ker(x_scan)
-    data_density = d_ker(x_scan)
     threshold = 0.01 * np.max(prior_density)
     
     # Get indices where prior is significant
@@ -213,6 +172,7 @@ def findM(qs_ker, d_ker):
         ys = np.array([dq(x_scan[i], qs_ker, d_ker) for i in valid_indices])
 
         res = np.min(ys) # This is the most negative value (e.g., -50)
+
         # Plot the rejection sampling diagnostic
         plt.figure(figsize=(8, 5))
         plt.plot(x_scan[valid_indices], ys, label='−d/q ratio', color='blue', alpha=0.7)
@@ -222,6 +182,7 @@ def findM(qs_ker, d_ker):
         plt.grid(True, alpha=0.3)
         plt.show()
         
+        # Plot the prior and data pdfs
         x_plot = np.linspace(0,0.2,2000)
         plot_prior_density = qs_ker(x_plot)
         plot_data_density = d_ker(x_plot)
@@ -239,15 +200,20 @@ def findM(qs_ker, d_ker):
     else:
         raise Exception
     
-    return -res
-def meas_data_readout(qubit, prep_state, datafile: str = ''):
+    return -res # Return the maximiser of the ratio (minimiser of the negative ratio)
+
+def meas_data_readout(qubit, prep_state:str = '', datafile:str = ''):
     """
     Function to readout json files or suitable numpy arrays
     """
 
     if type(qubit) != int:
         raise Exception("Must supply an integer label for the interested qubit in `meas_data_readout()`") 
+    
+    if not prep_state:
+        raise Exception("Must supply a `prep_state` parameter to meas_data_readout()")
 
+    # Read in the json datafile which is called /Braket_Qubit_Calibration.json located in the self.file_address directory
     if datafile.endswith('.json'):
         with open(str(datafile), 'r') as file:
             data = json.load(file)
@@ -267,33 +233,46 @@ def meas_data_readout(qubit, prep_state, datafile: str = ''):
         return epsilon10
 
 class SplitMeasFilter:
-    """Measurement error filter.
+    """A scalable and accurate measurement error object, 
+        designed to measure, infer, and mitigate measurement bitflip errors.
 
     Attributes:
-        qubit_order: array,
-          using order given by the Braket [q0, q1, ...].
-        data: bit string array,
-          Has to be bit string array from circuit of all hadamard gates, leave as [] if data is saved already
+        qubit_order: list,
+          Using measurement order given by the Braket [q0, q1, ...].
+        load_data: bool,
+          Boolean value controlling if infered data are to be loaded back in.
+          Set to False if intending to complete many inference runs 
+        home_dir: str,
+          String containing the 'home' of the inference project,
+          location of where files, plots, etc. are to be created
+        data: np.ndarray
+          data containing calibrations. Not fully supported.
+          Strongly recommended to use a .json saved as `Braket_Qubit_Calibration.json` in self.file_address
         file_address: string
-          the address for saving Params.csv and Filter_data.csv. 
+          the address for reading and saving data, both raw braket readings, and posteriors.
           End with '/' if not empty.
         prior: dict
-          priors of each qubit. {'Qubit0':[...], 'Qubit1': [...], ...}
+          dict containing all the qubits in qubit_order, with prior arrays as values
+        post_full: dict
+          dict containing a dicts of all the qubits in qubit_order, 
+          with posterior arrays as values for '0' and '1' as keys
         post: dict
-          posterior of each qubit. {'Qubit0':[...], 'Qubit1': [...], ...}
+          dict containing a dicts of all the qubits in qubit_order, 
+          with posterior mean and mode as values and keys:
+          'e0_mean'
+          'e0_mode'
+          'e1_mean'
+          'e1_mode'
         params: dict
-          backend properties. Not None after execute inference()
-        data: array
-          return of read_filter_data(). Not None after execute inference()
-        mat_mean: numpy array
-          transition matrix created from posterior mean.
-          Not None after execute inference()
-        mat_mode: numpy array
-          transition matrix created from posterior mode.
-          Not None after execute inference()
-          
+          Parameter dict with 'err0' and 'err1' as keys, and errors as values.
+          Non-standard, preferred to use a .json saved as `Braket_Qubit_Calibration.json` in self.file_address
+        inv_matrices_mean: np.ndarray
+          inverse matrix to mitigate measurement noise from mean of posterior distributions
+        inv_matrices_mode: np.ndarray
+          inverse matrix to mitigate measurement noise from mode of posterior distributions
+
     """
-    def __init__(self, qubit_order, load_data=True, home_dir=None, data=None, file_address='data/', device=None):
+    def __init__(self, qubit_order:list, load_data:bool=True, home_dir:str='.', data:np.ndarray=np.array([]), file_address:str='data/'):
         if home_dir:
             self.home_dir = home_dir
             try:
@@ -309,23 +288,10 @@ class SplitMeasFilter:
         self.post = {f'Qubit{q}': {} for q in self.qubit_order}
         full_post_path = Path(os.path.join(self.file_address, 'Post_Full_Current.json'))
         
-        if full_post_path.is_file() and load_data == True:
-            print(f"Loading historical data from {full_post_path}...")
-            try:
-                with open(full_post_path, 'r') as f:
-                    loaded_data = json.load(f)
-                
-                # RECONSTRUCT NUMPY ARRAYS
-                # JSON loads lists, but code expects numpy arrays (e.g. for .size or .mean)
-                for q_key, states in loaded_data.items():
-                    if q_key in self.post_full:
-                        self.post_full[q_key]['0'] = np.array(states['0'])
-                        self.post_full[q_key]['1'] = np.array(states['1'])
-            except Exception as exc:
-                print(f"Failed to load JSON data: {exc}")
-
+        if full_post_path.is_file() and load_data == True: self._load_historical_data(full_post_path)
+            
         # Device calibration loading
-        self.params = None #if device is None else get_braket_calibration_dict(device, n_qubits=len(qubit_order))
+        self.params = None # Use must define, if they intend to not use the braket .json
         self.inv_matrices_mean = []
         self.inv_matrices_mode = []
 
@@ -334,7 +300,7 @@ class SplitMeasFilter:
         if self.post_full[last_q]['0'].size > 0 and self.post_full[last_q]['1'].size > 0:
             self.create_filter_mat() 
             
-            # Recalculate Mean/Mode from the loaded full data
+            # Calculate mean/mode from the loaded full data
             self.post = {f'Qubit{q}': {
                 'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 
                 'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
@@ -350,7 +316,22 @@ class SplitMeasFilter:
                 self.data['0'] = np.atleast_1d(data)
         else:
             self._load_data_from_files() 
-            pass
+
+    def _load_historical_data(self,full_post_path):
+        """Loading in historical posterior inference data"""
+        print(f"Loading historical data from {full_post_path}...")
+        try:
+            with open(full_post_path, 'r') as f:
+                loaded_data = json.load(f)
+        except Exception as exc:
+            raise Exception(f"Failed to load JSON data: {exc}")
+        
+        # Create np.ndarrays from .json outputs
+        for q_key, states in loaded_data.items():
+            if q_key in self.post_full:
+                self.post_full[q_key]['0'] = np.array(states['0'])
+                self.post_full[q_key]['1'] = np.array(states['1'])
+
 
     def output(self,
             d,
@@ -367,11 +348,13 @@ class SplitMeasFilter:
 
         Parameters
         ----------
-        d : array
+        d : list
             array of data (Observed QoI). Here, it is array of prob. of meas. 0.
-        interested_qubit : int
-            The index of qubit that we are looking at. 
+        qubit : int
+            The number of qubit that we are looking at. 
             For the use of naming the figure file only.
+        total_shots : int
+            Total number of shots used in the construction of the data pdf
         M : int
             Number of priors required.
         params : dict
@@ -384,28 +367,24 @@ class SplitMeasFilter:
             prior parameters (for measurement error).
         seed : int, optional
             Seed for random numbers. The default is 127.
-        show_denoised : boolean, optional
-            If plot the comparision between post. parameter and 
-            given parameters in params. The default is False since 
-            it is very time consuming and unnecessary in most of case
-        file_address : String, optional
-            The relative file address to save posteriors and figures. 
-            Ends with '/' if not empty
-            The default is ''.
+        State_Data_address : str
+            Where plots and posterior data are store.
+        prep_state : str
+            State prepared and errors calculated.
 
         Returns
         -------
-        prior_lambdas : numpy array
+        prior_error_rates : np.ndarray
             prior lambdas in the form of a-by-b matrix where 
             a is the number of priors and m is the number of model parameters
-        post_lambdas : numpy array
+        posterior_error_rates : np.ndarray
             prior lambdas in the form of a-by-b matrix where 
             a is the number of posterior and m is the number of model parameters
 
         """
         np.random.seed(seed)
         qubit = int(qubit)
-        # Determine Prior Mean from Params
+        # Determine prior mean from params
         try:
             if self.params:
                 if prep_state == '0':
@@ -419,9 +398,8 @@ class SplitMeasFilter:
             print("Either didn't provide 'params = {...}' (not recommended)\n" 
                   f"and no file named {os.path.join(self.file_address, 'Braket_Qubit_Calibration.json')} located in the {self.file_address} directory: {e}")
             prior_mean = 0.05
-            
 
-        # Generate Priors (Success Rates)
+        # Generate Priors (Error Rates)
         prior_error_rates = tnorm01(prior_mean, prior_sd, size=M)
         qs = prior_error_rates
 
@@ -432,8 +410,7 @@ class SplitMeasFilter:
         try:
             # To define P(p|error_count), we use the Beta distribution, as this is the inverse of the Binomial distribution. 
             # Proportional to Beta(alpha = successes+1, beta = total_trials - successes + 1)
-            def d_ker(x):
-                return ss.beta.pdf(x, (data_errors*total_shots) + 1, total_shots*(1 - data_errors) + 1)
+            def d_ker(x): return ss.beta.pdf(x, (data_errors*total_shots) + 1, total_shots*(1 - data_errors) + 1)
             qs_ker = ss.gaussian_kde(qs)
         except Exception as e:
             print(f"   KDE Failed (Data likely singular): {e}")
@@ -467,14 +444,15 @@ class SplitMeasFilter:
         return prior_error_rates, post_error_rates
 
     def _load_posterior_marginals(self):
-        for prep_state in ['0', '1']:
-            for q in self.qubit_order:
-                path = os.path.join(self.file_address, f'State{prep_state}_Post_Qubit{q}.csv')
-                try:
-                    self.post_full[f'Qubit{q}'][prep_state] = pd.read_csv(path, header=None, dtype=float).values.flatten()
-                    print(f"Loaded {len(self.post_full[f'Qubit{q}'][prep_state])} Posterior Values for Qubit {q}, State {prep_state}.")
-                except Exception as e:
-                    print(f"Error reading {path}: {e}")
+        for q in self.qubit_order:
+            path = os.path.join(self.file_address, f'State0_Post_Qubit{q}.csv')
+            path = os.path.join(self.file_address, f'State1_Post_Qubit{q}.csv')
+            try:
+                self.post_full[f'Qubit{q}']['0'] = pd.read_csv(path, header=None, dtype=float).values.flatten()
+                print(f"Loaded {len(self.post_full[f'Qubit{q}']['0'])} Posterior Values for Qubit {q}, State 0.")
+                print(f"Loaded {len(self.post_full[f'Qubit{q}']['1'])} Posterior Values for Qubit {q}, State 1.")
+            except Exception as e:
+                print(f"Error reading {path}: {e}")
 
     def _load_data_from_files(self):
         # State 0
@@ -519,11 +497,8 @@ class SplitMeasFilter:
         seed : int, optional
             Seed for random numbers. The default is 227.
             Same as seed in output().
-        show_denoised : boolean, optional
-            If plot the comparision between post. parameter and 
-            given parameters in params. The default is False since 
-            it is very time consuming and unnecessary in most of case.
-            Same as show_denoised in output().
+        prep_state : str
+            '0' or '1', the prepared state to calculate noise from
 
         Returns
         -------
@@ -538,13 +513,16 @@ class SplitMeasFilter:
              print(f"CRITICAL: No data for prep_state='{prep_state}'. Skipping.")
              return
 
-        for idx,q in enumerate(self.qubit_order):                       # The qubit array order giving the index is given by the aws bracket as `task.result().measurement_qubits`
+        for idx,q in enumerate(self.qubit_order):                       
+        
+            # The qubit array order giving the index is given by the aws bracket as `task.result().measurement_qubits`
+        
             print(f'Inferring Qubit {q} for State |{prep_state}>')
             
             try:
                 d = getData0(current_data, idx)
             except Exception as e:
-                print(f"   Error in getData0: {e}")
+                print(f"   Error in getData0(): {e}")
                 continue
 
             Posterior_dir = os.path.join(self.file_address, "Posterior Data")
@@ -644,61 +622,19 @@ class SplitMeasFilter:
             m1 = safe_mean(self.post_full[q_key]['1'])
             res[q_key] = np.array([m0, m1])
         return res    
-    
-    def _apply_tensor_inversion(self, counts, inv_matrices):
-        """
-        Helper function to apply the chain of inverses to a probability vector.
-        """
-        shots = sum(counts.values())
-        n = len(self.qubit_order)
         
-        # Convert Dictionary counts to Vector
-        vec = dictToVec(n, counts) / shots
-        
-        # Reshape to Tensor [2, 2, ..., 2]
-        current_tensor = vec.reshape([2] * n)
-        
-        # Apply inverses sequentially
-        for i, inv_mat in enumerate(inv_matrices):
-            # Swap target axis 'i' to front (axis 0)
-            current_tensor = np.swapaxes(current_tensor, 0, i)
-            
-            # Flatten to (2, -1) and multiply: M @ vec
-            shape_now = current_tensor.shape
-            flat = current_tensor.reshape(2, -1)
-            new_flat = np.dot(inv_mat, flat)
-            
-            # Reshape back and swap axis back
-            current_tensor = new_flat.reshape(shape_now)
-            current_tensor = np.swapaxes(current_tensor, 0, i)
-            
-        # Flatten and Normalize
-        corrected_vec = current_tensor.flatten()
-        
-        # OPTIONAL: Enforce physical constraints (probabilities >= 0)
-        # This replaces the 'find_least_norm' QP solver which is slow.
-        # Simple projection: Clip negatives and re-normalize.
-        corrected_vec[corrected_vec < 0] = 0
-        total_p = np.sum(corrected_vec)
-        if total_p > 0:
-            corrected_vec = corrected_vec / total_p
-            
-        return vecToDict(n, shots, corrected_vec)
-    
-    def filter_mean(self, counts):
-        return self._apply_tensor_inversion(counts, self.inv_matrices_mean)
-
-    def filter_mode(self, counts):
-        return self._apply_tensor_inversion(counts, self.inv_matrices_mode)
-    
     def get_inverse_element(self, target_bitstring, source_bitstring, method = 'mean'):
         """
         Calculates the probability transition factor from Source (Noisy) -> Target (Clean).
         Mathematically: returns the element (Row=Target, Col=Source) of the Inverse Matrix.
         
         Args:
-            target_bitstring (str): The 'clean' state we are calculating probability for.
-            source_bitstring (str): The 'noisy' state we actually measured.
+            target_bitstring : str
+                The 'clean' state we are calculating probability for.
+            source_bitstring : str
+                The 'noisy' state we actually measured.
+            method : str
+                Either 'mean' or 'mode', which average of the posterior to use
         """
         # Ensure we have the matrices
         if not self.inv_matrices_mean:
@@ -707,7 +643,6 @@ class SplitMeasFilter:
         probability_factor = 1.0
         
         # Iterate through qubits to multiply local probabilities
-        # We assume Little Endian (Qubit 0 is right-most character)
         for i, q in enumerate(self.qubit_order):
             # Parse the specific bit for this qubit from the strings
             # String index must be reversed: string[-1] is Qubit 0
@@ -765,18 +700,25 @@ class SplitMeasFilter:
         return prob
     
 
-    def eff_DeNoise(self, datadict, method = 'mean', percentage=100, verbose=True, GD = False, lr=0.1, max_iter=50):
+    def eff_DeNoise(self, datadict, method = 'mean', percentage: int|float =100, verbose=True, GD = False, lr=0.1, max_iter=50):
         """
         Efficient DeNoiser function that applies the SplitMeasFilter to the provided data dictionary.
         
         Parameters:
-        - datadict: Dictionary containing measurement data.
-        - SplitMeasFilter: An instance of the SplitMeasFilter class with calibrated errors.
-        - percentage: percentage threshold for filtering (default is 99).
-        - verbose: If True, prints progress information.
-        - GD: If True, performs optional Gradient Descent refinement.
-        - lr: Learning rate for Gradient Descent (if GD is True).
-        - max_iter: Maximum number of iterations for Gradient Descent (if GD is True).
+        datadict: dict
+            Dictionary containing measurement data.
+        method : str
+            'mean' or 'mode'
+        percentage: int|float
+            percentage threshold for filtering (default is 100).
+        verbose : bool
+            If True, prints progress information.
+        GD : bool
+            If True, performs optional Gradient Descent refinement.
+        lr : float
+            Learning rate for Gradient Descent (if GD is True).
+        max_iter : int
+            Maximum number of iterations for Gradient Descent (if GD is True).
         
         Returns:
         - denoised_data: Dictionary containing denoised measurement data.
@@ -828,15 +770,13 @@ class SplitMeasFilter:
             factor = filtered_shots / sum_p
             final_data = {k: v * factor for k, v in final_data.items()}
         
-        # -------------------------------------------------------------------------
-        # OPTIONAL: GRADIENT DESCENT REFINEMENT
-        # -------------------------------------------------------------------------
+        # Overkill Gradient Descent procedure 
         if GD:
             if verbose: print(f"Analytic pass done. Starting Gradient Descent refinement...")
             
             n_dim = len(targets)
             
-            # A. Vectorize Data
+            # Vectorize Data
             # 'y' = The actual noisy observations we want to match
             p_noisy_obs = np.array([important_dict[t] for t in targets]) / filtered_shots
             
@@ -846,7 +786,7 @@ class SplitMeasFilter:
             for i, t in enumerate(targets):
                 p_est[i] = final_data.get(t, 0.0) / filtered_shots
             
-            # B. Build Forward Matrix M_sub for this subspace
+            # Build Forward Matrix M_sub for this subspace
             # We need M (Forward), not M_inv, to calculate the Loss: || M*x - y ||^2
             M_sub = np.zeros((n_dim, n_dim))
             
@@ -854,7 +794,7 @@ class SplitMeasFilter:
                 for c, hid_bit in enumerate(targets): # Col: Hidden (Clean)
                     M_sub[r, c] = self.get_forward_element(obs_bit, hid_bit)
             
-            # C. Projected Gradient Descent Loop
+            # Projected Gradient Descent Loop
             for step in range(max_iter-1):
                 # Forward: p_pred = M * p_est
                 p_pred = M_sub @ p_est
@@ -880,7 +820,7 @@ class SplitMeasFilter:
 
                 print(f"----  GD Step {step+1}/{max_iter} complete...  ----")
             
-            # D. Update final_data with refined values
+            # Update final_data with refined values
             final_data = {}
             for i, t in enumerate(targets):
                 if p_est[i] > 1e-9:
@@ -897,115 +837,113 @@ class SplitMeasFilter:
                 print(f"Total Shots (Input): {sum(datadict.values())} -> (Filtered): {filtered_shots} -> (Output): {sum(final_data.values())}")
 
 
-        # -------------------------------------------------------------------------
-
         final_data = {k: float(v) for k, v in final_data.items()} # np.float64 -> float
 
         return final_data
         
 
     def error_distributions(self, plotting=True, save_plots=False):
-            """
-            Calculates statistics and (optionally) plots the posterior distribution 
-            of measurement errors for each qubit.
+        """
+        Calculates statistics and (optionally) plots the posterior distribution 
+        of measurement errors for each qubit.
+        
+        Returns:
+            stats (dict): Dictionary containing mean, std, and 95% Confidence Intervals
+                        for both error_0 (p(1|0)) and error_1 (p(0|1)).
+        """
+        stats = {}
+
+        for idx,q in enumerate(self.qubit_order):
+            q_key = f'Qubit{q}'
             
-            Returns:
-                stats (dict): Dictionary containing mean, std, and 95% Confidence Intervals
-                            for both error_0 (p(1|0)) and error_1 (p(0|1)).
-            """
-            stats = {}
+            # Success Rates (Lambdas)
+            # These are samples of "Probability of measuring Correctly"
+            lam0_samples = self.post_full[q_key]['0'] if '0' in self.post_full[q_key] else np.array([])
+            lam1_samples = self.post_full[q_key]['1'] if '1' in self.post_full[q_key] else np.array([])
+            
+            if (not lam0_samples.any()) and (not lam1_samples):
+                print(f"Skipping Qubit {q}: Inference not complete.")
+                continue
+            elif (not lam0_samples.any()) or (not lam1_samples.any()):
+                print("Partial Inference complete, continuing")
 
-            for idx,q in enumerate(self.qubit_order):
-                q_key = f'Qubit{q}'
+            # Convert to Error Rates (Epsilons)
+            # Error = 1 - Success
+            if lam0_samples.any():
+                err0_samples = lam0_samples # Prob(Meas 1 | Prep 0)
+            else:
+                err0_samples = np.array([])
+
+            if lam1_samples.any():
+                err1_samples = lam1_samples # Prob(Meas 0 | Prep 1)
+            else:
+                err1_samples = np.array([])
+
+            # Calculate Statistics
+            stats[q_key] = {}
+            if err0_samples.any():
+                stats[q_key]['err0_mean'] = np.mean(err0_samples)
+                stats[q_key]['err0_std'] = np.std(err0_samples)
+                stats[q_key]['err0_95_CI'] = np.percentile(err0_samples, [2.5, 97.5])
+
+            if err1_samples.any():
+                stats[q_key]['err1_mean'] = np.mean(err1_samples)
+                stats[q_key]['err1_std'] = np.std(err1_samples)
+                stats[q_key]['err1_95_CI'] = np.percentile(err1_samples, [2.5, 97.5])
+            
+            # Plotting (KDE + Histogram)
+            if plotting:
+                plt.figure(figsize=(8, 5), dpi=100)
+                xs = np.linspace(0, 0.1, 1000)
                 
-                # Success Rates (Lambdas)
-                # These are samples of "Probability of measuring Correctly"
-                lam0_samples = self.post_full[q_key]['0'] if '0' in self.post_full[q_key] else np.array([])
-                lam1_samples = self.post_full[q_key]['1'] if '1' in self.post_full[q_key] else np.array([])
-                
-                if (not lam0_samples.any()) and (not lam1_samples):
-                    print(f"Skipping Qubit {q}: Inference not complete.")
-                    continue
-                elif (not lam0_samples.any()) or (not lam1_samples.any()):
-                    print("Partial Inference complete, continuing")
-
-                # Convert to Error Rates (Epsilons)
-                # Error = 1 - Success
-                if lam0_samples.any():
-                    err0_samples = lam0_samples # Prob(Meas 1 | Prep 0)
-                else:
-                    err0_samples = np.array([])
-
-                if lam1_samples.any():
-                    err1_samples = lam1_samples # Prob(Meas 0 | Prep 1)
-                else:
-                    err1_samples = np.array([])
-
-                # Calculate Statistics
-                stats[q_key] = {}
                 if err0_samples.any():
-                    stats[q_key]['err0_mean'] = np.mean(err0_samples)
-                    stats[q_key]['err0_std'] = np.std(err0_samples)
-                    stats[q_key]['err0_95_CI'] = np.percentile(err0_samples, [2.5, 97.5])
+                    # Plot Error 0 (Readout error on |0>)
+                    kde0 = ss.gaussian_kde(err0_samples)
+                    plt.plot(xs, kde0(xs), color='blue', label=r'$P(1|0)$ (Error on 0)')
+                    plt.fill_between(xs, kde0(xs), alpha=0.2, color='blue')
+
+                    # Plot Data KDE for comparison
+                    d0 = getData0(self.data.get('0', np.array([])), idx)
+                    err0 = 1 - d0
+
+                    d0_ker = ss.gaussian_kde(err0)
+                    plt.plot(xs, d0_ker(xs), color='darkslateblue', linestyle='--', label='Data KDE (State |0>)')
+                    plt.fill_between(xs, d0_ker(xs), alpha=0.1, color='darkslateblue')
 
                 if err1_samples.any():
-                    stats[q_key]['err1_mean'] = np.mean(err1_samples)
-                    stats[q_key]['err1_std'] = np.std(err1_samples)
-                    stats[q_key]['err1_95_CI'] = np.percentile(err1_samples, [2.5, 97.5])
+                    # Plot Error 1 (Readout error on |1>)
+                    kde1 = ss.gaussian_kde(err1_samples)
+                    plt.plot(xs, kde1(xs), color='red', label=r'$P(0|1)$ (Error on 1)')
+                    plt.fill_between(xs, kde1(xs), alpha=0.2, color='red')
+
+                    # Plot Data KDE for comparison
+                    d1 = getData0(self.data.get('1', np.array([])), idx)
+                    err1 = d1
+
+                    d1_ker = ss.gaussian_kde(err1)
+                    plt.plot(xs, d1_ker(xs), color='firebrick', linestyle='--', label='Data KDE (State |1>)')
+                    plt.fill_between(xs, d1_ker(xs), alpha=0.1, color='firebrick')
+
+                plt.title(f'Posterior Error Distributions - Qubit {q}')
+                plt.xlabel('Error Rate')
+                plt.ylabel('Density')
+                plt.legend()
+                plt.grid(True, alpha=0.3)
+                plt.xlim([0,0.1])
                 
-                # Plotting (KDE + Histogram)
-                if plotting:
-                    plt.figure(figsize=(8, 5), dpi=100)
-                    xs = np.linspace(0, 0.1, 1000)
-                    
-                    if err0_samples.any():
-                        # Plot Error 0 (Readout error on |0>)
-                        kde0 = ss.gaussian_kde(err0_samples)
-                        plt.plot(xs, kde0(xs), color='blue', label=r'$P(1|0)$ (Error on 0)')
-                        plt.fill_between(xs, kde0(xs), alpha=0.2, color='blue')
+                if save_plots:
+                    plt.savefig(self.file_address + f'ErrorDist_Qubit{q}.pdf')
+                
+                plt.show()
+                
+                # Print Summary
+                print(f"--- Qubit {q} Summary ---")
+                if err0_samples.any():
+                    print(f"Error on |0>: {stats[q_key]['err0_mean']:.4f} "
+                        f"(95% CI: {stats[q_key]['err0_95_CI'][0]:.4f} - {stats[q_key]['err0_95_CI'][1]:.4f})")
+                if err1_samples.any():
+                    print(f"Error on |1>: {stats[q_key]['err1_mean']:.4f} "
+                        f"(95% CI: {stats[q_key]['err1_95_CI'][0]:.4f} - {stats[q_key]['err1_95_CI'][1]:.4f})")
+                print("-" * 30)
 
-                        # Plot Data KDE for comparison
-                        d0 = getData0(self.data.get('0', np.array([])), idx)
-                        err0 = 1 - d0
-                        if len(d0) > 0:
-                            d0_ker = ss.gaussian_kde(err0)
-                            plt.plot(xs, d0_ker(xs), color='darkslateblue', linestyle='--', label='Data KDE (State |0>)')
-                            plt.fill_between(xs, d0_ker(xs), alpha=0.1, color='darkslateblue')
-
-                    if err1_samples.any():
-                        # Plot Error 1 (Readout error on |1>)
-                        kde1 = ss.gaussian_kde(err1_samples)
-                        plt.plot(xs, kde1(xs), color='red', label=r'$P(0|1)$ (Error on 1)')
-                        plt.fill_between(xs, kde1(xs), alpha=0.2, color='red')
-
-                        # Plot Data KDE for comparison
-                        d1 = getData0(self.data.get('1', np.array([])), idx)
-                        err1 = d1
-                        if len(d1) > 0:
-                            d1_ker = ss.gaussian_kde(err1)
-                            plt.plot(xs, d1_ker(xs), color='firebrick', linestyle='--', label='Data KDE (State |1>)')
-                            plt.fill_between(xs, d1_ker(xs), alpha=0.1, color='firebrick')
-
-                    plt.title(f'Posterior Error Distributions - Qubit {q}')
-                    plt.xlabel('Error Rate')
-                    plt.ylabel('Density')
-                    plt.legend()
-                    plt.grid(True, alpha=0.3)
-                    plt.xlim([0,0.1])
-                    
-                    if save_plots:
-                        plt.savefig(self.file_address + f'ErrorDist_Qubit{q}.pdf')
-                    
-                    plt.show()
-                    
-                    # Print Summary
-                    print(f"--- Qubit {q} Summary ---")
-                    if err0_samples.any():
-                        print(f"Error on |0>: {stats[q_key]['err0_mean']:.4f} "
-                            f"(95% CI: {stats[q_key]['err0_95_CI'][0]:.4f} - {stats[q_key]['err0_95_CI'][1]:.4f})")
-                    if err1_samples.any():
-                        print(f"Error on |1>: {stats[q_key]['err1_mean']:.4f} "
-                            f"(95% CI: {stats[q_key]['err1_95_CI'][0]:.4f} - {stats[q_key]['err1_95_CI'][1]:.4f})")
-                    print("-" * 30)
-
-            return stats
+        return stats
