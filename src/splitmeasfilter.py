@@ -148,14 +148,14 @@ def getData0(data:np.ndarray, interested_qubit_index:int) -> float:
     
     return prob0
 
-def dq(x, qs_ker, d_ker):
+def dq(x, qs_ker, d_pdf):
     """Calculates the ratio of the prior pdf to the data kernel safely at some point 'x'"""
-    if np.abs(qs_ker(x)[0]) > 1e-6 and np.abs(d_ker(x)) > 1e-6:
-        return - d_ker(x) / qs_ker(x)[0]
+    if np.abs(qs_ker(x)[0]) > 1e-6 and np.abs(d_pdf(x)) > 1e-6:
+        return - d_pdf(x) / qs_ker(x)[0]
     else:
         return np.inf
 
-def findM(qs_ker, d_ker):
+def findM(qs_ker, d_pdf):
     """Find M that maximises the d/q ratio for rejection sampling """
     
     # Find the min value in log-space (thus negative)
@@ -169,7 +169,7 @@ def findM(qs_ker, d_ker):
 
     if len(valid_indices) > 1:
         # Calculate -Ratio
-        ys = np.array([dq(x_scan[i], qs_ker, d_ker) for i in valid_indices])
+        ys = np.array([dq(x_scan[i], qs_ker, d_pdf) for i in valid_indices])
 
         res = np.min(ys) # This is the most negative value (e.g., -50)
 
@@ -185,7 +185,7 @@ def findM(qs_ker, d_ker):
         # Plot the prior and data pdfs
         x_plot = np.linspace(0,0.2,2000)
         plot_prior_density = qs_ker(x_plot)
-        plot_data_density = d_ker(x_plot)
+        plot_data_density = d_pdf(x_plot)
         plt.figure(figsize=(8, 5))
         plt.plot(x_plot, plot_prior_density, label='Prior Density', color='red', alpha=0.7)
         plt.fill_between(x_plot, plot_prior_density,color='red', alpha=0.1)
@@ -404,13 +404,13 @@ class SplitMeasFilter:
         qs = prior_error_rates
 
         if prep_state == '0':
-            data_errors = 1 - d
+            data_error = 1 - d
         else:
-            data_errors = d
+            data_error = d
         try:
             # To define P(p|error_count), we use the Beta distribution, as this is the inverse of the Binomial distribution. 
             # Proportional to Beta(alpha = successes+1, beta = total_trials - successes + 1)
-            def d_ker(x): return ss.beta.pdf(x, (data_errors*total_shots) + 1, total_shots*(1 - data_errors) + 1)
+            def d_pdf(x): return ss.beta.pdf(x, (data_error*total_shots) + 1, total_shots*(1 - data_error) + 1)
             qs_ker = ss.gaussian_kde(qs)
         except Exception as e:
             print(f"   KDE Failed (Data likely singular): {e}")
@@ -420,10 +420,10 @@ class SplitMeasFilter:
         print(f'Given Lambda |{prep_state}>: prior error rate = {prior_mean:.4f}')
 
         # Optimization
-        max_r = findM(qs_ker, d_ker)
+        max_r = findM(qs_ker, d_pdf)
 
         # Rejection Sampling
-        r_vals = d_ker(qs) / qs_ker(qs)
+        r_vals = d_pdf(qs) / qs_ker(qs)
         eta = r_vals / max_r 
         accept_mask = eta > np.random.uniform(0, 1, M)
         post_error_rates = prior_error_rates[accept_mask]
