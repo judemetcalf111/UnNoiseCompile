@@ -57,6 +57,49 @@ def closest_mode(post_lambdas):
             sol = lam
     return sol
 
+def gate_error_posterior(gate_num:int, total_shots:int, point_error:float, num_samples:int=10000):
+    """
+    Returns samples from the exact posterior for gate error 
+    using independance and bitflip assumptions using grid approximation.
+    For use in accurately calculating gate errors in QoI_to_noised_errors()
+
+    Args:
+        gate_num : int
+            Number of gates
+        total_shots : int
+            Total shot count
+        point_error : float
+            Estimated total error rate at measurement after filtering for measurement bitflips
+        num_samples : int
+    """
+    # We restrict p to [0, 0.5) because of the symmetry limit
+    grid_size = 10_000
+    p_grid = np.linspace(1e-9, 0.4999, grid_size)
+    
+    # P(total_X) = (1 - (1-2p)^M)/2
+    # P(total_I) = (1 + (1-2p)^M)/2
+    factor = (1 - 2 * p_grid)**gate_num
+    prob_flip = (1 - factor) / 2
+    prob_no_flip = (1 + factor) / 2
+    
+    # log(L) = k*log(P_flip) 
+    #          + (n-k)*log(P_no_flip)
+    log_likelihood = (
+                        (point_error * total_shots) * np.log(prob_flip) 
+                        + ( (1-point_error) * total_shots ) * np.log(prob_no_flip) 
+                        )
+    
+    # Subtract max to ensure the highest value is exp(0) = 1 (numerical stability)
+    unnormalized_posterior = np.exp(log_likelihood - np.max(log_likelihood))
+    
+    posterior_pdf = unnormalized_posterior / np.sum(unnormalized_posterior)
+    
+    # weighted random choice from numpy
+    samples = np.random.choice(p_grid, size=num_samples, p=posterior_pdf)
+    
+    return samples, posterior_pdf
+
+
 
 def closest_average(post_lambdas):
     """Find the tuple of model parameters that closed to 
@@ -87,7 +130,7 @@ def closest_average(post_lambdas):
 ######################## For Parameter Characterzation ########################
 
 # used to call QoI
-def QoI_to_noised_errors(data_obs: np.ndarray, prior_errors: np.ndarray, gate_type, gate_num):
+def QoI_to_noised_errors(data_obs: float, prior_errors: np.ndarray, total_shots, gate_type, gate_num):
     """
     Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
 
@@ -163,17 +206,26 @@ def QoI_to_noised_errors(data_obs: np.ndarray, prior_errors: np.ndarray, gate_ty
     qs = M_observed[:, 0, 0]
 
     if ideal_p0 == 0:
-        data_errors = 1 - data_obs
+        data_error_centre = 1 - data_obs
         prior_noised_error = 1 - qs
     elif ideal_p0 == 1:
-        data_errors = data_obs
+        data_error_centre = data_obs
         prior_noised_error = 1 - qs
     else:
         print(f"Error in calculating ideal_p0: {ideal_p0}\n"
               "Returning p0s")
-        return data_obs, qs
+        return data_obs, qs, ss.gaussian_kde(data_obs)
     
-    return data_errors, prior_noised_error
+    print("------ Calculating the data distribution of error rates... ------")
+    sampled_gate_errors, d_pdf = gate_error_posterior(gate_num,total_shots,data_error_centre,num_samples)
+    print("------  Discovered the data distribution of error rates!   ------")
+
+    if len(sampled_gate_errors) != prior_noised_error:
+        raise Exception("prior and data distribution samples have different sizes... Error in calculating priors")
+
+    return sampled_gate_errors, prior_noised_error, d_pdf
+
+
 
 def data_readout(qubit, datafile: str = '', data: np.ndarray = np.array([])):
     """
@@ -274,7 +326,7 @@ class SplitGateFilter:
             pass
         self.meas_cal_dir = meas_cal_dir if meas_cal_dir else home_dir
         self.data_file_address = data_file_address
-
+        
         # --- Initialize Data Structures ---
         self.meas_prior = {}    # Not yet loaded measurement error prior
         self.post_full = {}     # Full posterior
@@ -455,9 +507,11 @@ class SplitGateFilter:
                 raw_data = read_data(interested_circuit, gate_type, gate_num, 
                                     file_address=self.data_file_address)
                 
-                # Calculate the probability of measuring 0
-                d_obs = getData0(raw_data, idx)
+                total_shots = np.size(raw_data,axis=0)
                 
+                # Calculate the probability of measuring 0 from the total shots
+                d_obs = getData0(raw_data, idx)
+
                 # Construct Prior Matrix [M x 3]
                 prior_errors = np.zeros((nPrior, 3))
                 
@@ -505,20 +559,20 @@ class SplitGateFilter:
                 ### Run Rejection Sampling ###
 
                 # Calculate Densities
-                data_errors, qs = QoI_to_noised_errors(d_obs, prior_errors, gate_type, gate_num)
-                d_ker = ss.gaussian_kde(data_errors)
+                data_errors, qs, d_pdf = QoI_to_noised_errors(d_obs, prior_errors, total_shots, gate_type, gate_num)
+                d_pdf =  ss.gaussian_kde(data_errors) # Note that from QoI_to_noised_errors(), the data_errors array are samples drawn
                 qs_ker = ss.gaussian_kde(qs)
                 
-                # Find Maximum Ratio (Optimization)
+                # Find Maximum Ratio (Optimisation)
                 # Uses existing helper findM
-                max_r, max_q = findM(qs_ker, d_ker) # Gate exp usually targets 0 or 1, check logic
+                max_r, max_q = findM(qs_ker, d_pdf) # Gate exp usually targets 0 or 1, check logic
 
                 print('Final Accepted Posterior Lambdas')
                 print('M: %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
-                (max_r, max_q, d_ker(max_q), qs_ker(max_q)))
+                (max_r, max_q, d_pdf(max_q), qs_ker(max_q)))
                 
                 # Rejection Sampling
-                r_vals = d_ker(qs) / qs_ker(qs)
+                r_vals = d_pdf(qs) / qs_ker(qs)
                 eta = r_vals / max_r
                 accept_mask = eta > np.random.uniform(0, 1, nPrior)
                 post_errors = prior_errors[accept_mask]
@@ -563,8 +617,7 @@ class SplitGateFilter:
                 print(f"-> Inferred {len(post_errors)} samples for Qubit{q_key} ({qubit_couple_key})")
 
                 if plotting:
-                    data_errors, post_qs = QoI_to_noised_errors(d_obs, post_errors, gate_type, gate_num) 
-                    post_ker = ss.gaussian_kde(post_qs)
+                    post_ker = ss.gaussian_kde(post_gaterr)
 
                     # Integration for validation (Riemann Sum)
                     xs = np.linspace(0, 1, 1000)
@@ -576,7 +629,7 @@ class SplitGateFilter:
                     valid_indices = pdf_vals > 1e-12
                     
                     r_int = np.zeros_like(q_eval)
-                    r_int[valid_indices] = d_ker(q_eval[valid_indices]) / pdf_vals[valid_indices]
+                    r_int[valid_indices] = d_pdf(q_eval[valid_indices]) / pdf_vals[valid_indices]
                     
                     delta_x = xs[1:] - xs[:-1]
                     I = np.sum(r_int * pdf_vals * delta_x)
@@ -590,16 +643,16 @@ class SplitGateFilter:
                     print('Posterior Lambda Mode', closest_mode(post_errors))
 
                     print('0 to 1: KL-Div(pi_D^Q(post),pi_D^obs) = %6g' %
-                        (ss.entropy(post_ker(xs), d_ker(xs))))
+                        (ss.entropy(post_ker(xs), d_pdf(xs))))
                     print('0 to 1: KL-Div(pi_D^obs,pi_D^Q(post)) = %6g' %
-                        (ss.entropy(d_ker(xs), post_ker(xs))))
+                        (ss.entropy(d_pdf(xs), post_ker(xs))))
 
                     # Defining matplotlib width and height here as in the preamble for clarity
                     width, height = 10, 6 
                     
                     xsd = np.linspace(0,0.2,2000)
                     plt.figure(figsize=(width, height), dpi=120, facecolor='white')
-                    plt.plot(xsd, d_ker(xsd), color='Red', linestyle='dashed', linewidth=3, label=r'$\pi^{\mathrm{obs}}_{\mathcal{D}}$')
+                    plt.plot(xsd, d_pdf(xsd), color='Red', linestyle='dashed', linewidth=3, label=r'$\pi^{\mathrm{obs}}_{\mathcal{D}}$')
                     plt.plot(xsd, post_ker(xsd), color='Blue', label=r'$\pi_{\mathcal{D}}^{Q(\mathrm{post})}$')
                     plt.xlabel('Pr(Meas. 0)')
                     plt.ylabel('Density')
