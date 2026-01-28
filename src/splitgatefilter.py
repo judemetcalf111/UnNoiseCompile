@@ -57,49 +57,149 @@ def closest_mode(post_lambdas):
             sol = lam
     return sol
 
-def gate_error_posterior(gate_num:int, total_shots:int, point_error:float, num_samples:int=10000):
+def dq_Gate(qs_val, d_val):
+    """Calculates the ratio of the prior pdf to the data kernel safely at some point 'x'"""
+    if np.abs(qs_val) > 1e-6 and np.abs(d_val) > 1e-6:
+        return - d_val / qs_val
+    else:
+        return np.inf
+
+def findGateM(qs_ker, d_pdf):
+    """Find M that maximises the d/q ratio for rejection sampling """
+    
+    # Find the min value in log-space (thus negative)
+    x_scan = np.linspace(0, 0.1, 40000) 
+    
+    prior_density = qs_ker(x_scan)
+    threshold = 0.01 * np.max(prior_density)
+    
+    # Get indices where prior is significant
+    valid_indices = np.where(prior_density > threshold)[0]
+
+    if len(valid_indices) > 1:
+        # We use .item() to safely turn array([0.5]) into 0.5, calculating negative ratio
+        ys = np.array([
+            dq_Gate(qs_ker(x_scan[i]).item(), d_pdf(x_scan[i]).item()) 
+            for i in valid_indices
+        ])
+
+        res = np.min(ys) # This is the most negative value (e.g., -50)
+
+        # Plot the rejection sampling diagnostic
+        plt.figure(figsize=(8, 5))
+        plt.plot(x_scan[valid_indices], ys, label='−d/q ratio', color='blue', alpha=0.7)
+        plt.axhline(res, color='red', linestyle='--', label='Threshold (1% of max)')
+        plt.xlabel('Error rate')
+        plt.title('Rejection Sampling Diagnostic, -data/prior')
+        plt.grid(True, alpha=0.3)
+        plt.show()
+        
+        # Plot the prior and data pdfs
+        x_plot = np.linspace(0,0.2,2000)
+        plot_prior_density = qs_ker(x_plot)
+        plot_data_density = d_pdf(x_plot)
+        plt.figure(figsize=(8, 5))
+        plt.plot(x_plot, plot_prior_density, label='Prior Density', color='red', alpha=0.7)
+        plt.fill_between(x_plot, plot_prior_density,color='red', alpha=0.1)
+        plt.plot(x_plot, plot_data_density, label='Data Density', color='blue', alpha=0.7)
+        plt.fill_between(x_plot, plot_data_density,color='blue', alpha=0.1)
+        plt.xlabel('Error rate')
+        plt.title('Prior and Data Distribution')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.show()
+
+    else:
+        raise Exception
+    
+    return -res # Return the maximiser of the ratio (minimiser of the negative ratio)
+
+
+def gate_error_posterior_with_readout_noise(
+    gate_num: int, 
+    prep_state: str,
+    total_shots: int, 
+    observed_flips: int,  # Raw count of '1's (or 'errors') observed
+    prior_errors: np.ndarray, # Shape (N, 2): [[P(0|1), P(1|0)], ...]
+    num_posterior_samples: int = 10000
+):
     """
-    Returns samples from the exact posterior for gate error 
-    using independance and bitflip assumptions using grid approximation.
-    For use in accurately calculating gate errors in QoI_to_noised_errors()
-
-    Args:
-        gate_num : int
-            Number of gates
-        total_shots : int
-            Total shot count
-        point_error : float
-            Estimated total error rate at measurement after filtering for measurement bitflips
-        num_samples : int
+    Calculates the posterior of gate error p, marginalizing over readout error uncertainty.
+    
+    Parameters
+    ----------
+    readout_error_samples : np.ndarray
+        Samples from your measurement error characterization.
+        Column 0: p(0|1) - False Negative (read 0 when state is 1)
+        Column 1: p(1|0) - False Positive (read 1 when state is 0)
     """
-    # We restrict p to [0, 0.5) because of the symmetry limit
-    grid_size = 10_000
-    p_grid = np.linspace(1e-9, 0.4999, grid_size)
     
-    # P(total_X) = (1 - (1-2p)^M)/2
-    # P(total_I) = (1 + (1-2p)^M)/2
-    factor = (1 - 2 * p_grid)**gate_num
-    prob_flip = (1 - factor) / 2
-    prob_no_flip = (1 + factor) / 2
+    # 1. Define the Grid for Gate Error p
+    # Use geomspace for precision near zero
+    p_grid = np.geomspace(1e-9, 0.4999, 5000)
     
-    # log(L) = k*log(P_flip) 
-    #          + (n-k)*log(P_no_flip)
-    log_likelihood = (
-                        (point_error * total_shots) * np.log(prob_flip) 
-                        + ( (1-point_error) * total_shots ) * np.log(prob_no_flip) 
-                        )
+    # 2. Pre-calculate the Ideal Theory (State Probability)
+    # Probability of the state being flipped after N gates (without readout noise)
+    # shape: (1, 5000)
+    p_state_flip = ((1 - (1 - 2 * p_grid)**gate_num) / 2).reshape(1, -1)
+    p_state_correct = 1 - p_state_flip
     
-    # Subtract max to ensure the highest value is exp(0) = 1 (numerical stability)
-    unnormalized_posterior = np.exp(log_likelihood - np.max(log_likelihood))
+    # 3. Incorporate Readout Noise (The "Forward Noise" Step)
+    # We broadcast Readout Error Samples (N, 1) against p-grid (1, 5000)
     
-    posterior_pdf = unnormalized_posterior / np.sum(unnormalized_posterior)
+    # Extract SPAM parameters
+    # prob_read_1_given_0 
+    err_0 = prior_errors[:, 0].reshape(-1, 1) 
+    # prob_read_0_given_1 
+    err_1 = prior_errors[:, 1].reshape(-1, 1) 
     
-    # weighted random choice from numpy
-    samples = np.random.choice(p_grid, size=num_samples, p=posterior_pdf)
+    # Calculate Probability of OBSERVING a flip (Outcome 1)
+    # P(obs 1) = P(state 1)*P(read 1|1) + P(state 0)*P(read 1|0)
+    # P(read 1|1) = 1 - err_0
+    # P(read 1|0) = err_1
     
-    return samples, posterior_pdf
-
-
+    if prep_state == '0':
+        p_obs_flip = (p_state_flip * (1 - err_1)) + (p_state_correct * err_0)
+        p_obs_no_flip = 1 - p_obs_flip
+    elif prep_state == '0':
+        p_obs_flip = (p_state_flip * (1 - err_0)) + (p_state_correct * err_1)
+        p_obs_no_flip = 1 - p_obs_flip
+    else:
+        raise Exception("`prep_state` neither '0' nor '1'")
+    
+    # 4. Compute Likelihood of Raw Data
+    # L = P(obs_flip)^k * P(obs_no_flip)^(n-k)
+    # We do this in log space to avoid underflow
+    
+    # Clamp for numerical safety
+    p_obs_flip = np.maximum(p_obs_flip, 1e-300)
+    p_obs_no_flip = np.maximum(p_obs_no_flip, 1e-300)
+    
+    log_likelihoods = (
+        observed_flips * np.log(p_obs_flip) + 
+        (total_shots - observed_flips) * np.log(p_obs_no_flip)
+    )
+    
+    # 5. Marginalize over Readout Errors
+    # We have a matrix of log_likelihoods: (Num_SPAM_Samples, Num_P_Grid_Points)
+    # We need to average over the SPAM samples (rows) to get the marginal likelihood for p
+    
+    # Convert back to probability space safely
+    # We subtract the global max to keep exp() in range
+    global_max = np.max(log_likelihoods)
+    likelihoods = np.exp(log_likelihoods - global_max)
+    
+    # Average over the nuisance parameters (readout noise samples)
+    # Axis 0 is the SPAM samples
+    marginal_likelihood = np.mean(likelihoods, axis=0)
+    
+    # 6. Normalize to get PDF
+    posterior_pdf = marginal_likelihood / np.sum(marginal_likelihood)
+    
+    # 7. Sample
+    samples = np.random.choice(p_grid, size=num_posterior_samples, p=posterior_pdf)
+    
+    return samples
 
 def closest_average(post_lambdas):
     """Find the tuple of model parameters that closed to 
@@ -130,7 +230,7 @@ def closest_average(post_lambdas):
 ######################## For Parameter Characterzation ########################
 
 # used to call QoI
-def QoI_to_noised_errors(data_obs: float, prior_errors: np.ndarray, total_shots, gate_type, gate_num):
+def QoI_to_noised_errors(data_obs: float, prior_errors: np.ndarray, total_shots, gate_type, gate_num:int) -> np.ndarray:
     """
     Function equivalent to Q(lambda) in https://doi.org/10.1137/16M1087229
 
@@ -154,77 +254,33 @@ def QoI_to_noised_errors(data_obs: float, prior_errors: np.ndarray, total_shots,
     num_samples = prior_errors.shape[0]
     
     gates = ['RY', 'RX', 'RZ', 'CZ', 'X', 'Y']
-    ideal_p0 = None
     
     if (gate_type == 'X') or (gate_type == 'RX') or (gate_type == 'CZ') or (gate_type == 'RY') or (gate_type == 'RY'):
         if (gate_num % 2 == 0):
-            ideal_p0 = 1
-        elif (gate_num % 2 == 1):
-            ideal_p0 = 0
+            prep_state = '0'
+        else:
+            prep_state = '1'
     elif gate_type == 'RZ':
-        ideal_p0 = 1
+        prep_state = '0'
     else:
         raise Exception(f"Gate Type {gate_type} not recognised, recognised gates are: {gates}")
-
-    # We extract the gate error column (index 2)
-    ep = np.array(prior_errors[:, 2])
     
-    # Calculate noisy_p0 for all samples at once using vectorised numpy array arithmetic
-    # Formula: p(cumulative flip) = (1 +/- (1-2e)^N)/2
-    decay_factor = (1 - (2 * ep)) ** gate_num
 
-    if ideal_p0 == 0:
-        noisy_p0 = (1 - decay_factor) / 2
-    elif ideal_p0 == 1:
-        noisy_p0 = (1 + decay_factor) / 2
+    if prep_state == '0':
+        data_error = 1 -data_obs
+    elif prep_state == '1':
+        data_error = data_obs
     else:
-        raise Exception("p0 was neither a '0' value or a '1' value. There should only be full (i.e. pi rotation) native gates in the circuit which act either as identity or an X-gate.")
-
-    noisy_p1 = 1 - noisy_p0
-
-    # Stack into shape (N, 2, 1) -> [[p0], [p1]] for efficient matrix multiplication
-    M_ideal = np.stack([noisy_p0, noisy_p1], axis=1)[..., np.newaxis]
-
-    # Vectorised Forward noising place of previous 
-
-    pm0p0 = 1 - np.array(prior_errors[:, 0])
-    pm1p1 = 1 - np.array(prior_errors[:, 1])
-
-    A_batch = np.zeros((num_samples, 2, 2))
-
-    # Row 0
-    A_batch[:, 0, 0] = pm0p0
-    A_batch[:, 0, 1] = 1 - pm1p1
-    
-    # Row 1
-    A_batch[:, 1, 0] = 1 - pm0p0
-    A_batch[:, 1, 1] = pm1p1
-
-    M_observed = A_batch @ M_ideal
-    
-    # The result is the Probability of Measuring 0 (First component)
-    qs = M_observed[:, 0, 0]
-
-    if ideal_p0 == 0:
-        data_error_centre = 1 - data_obs
-        prior_noised_error = 1 - qs
-    elif ideal_p0 == 1:
-        data_error_centre = data_obs
-        prior_noised_error = 1 - qs
-    else:
-        print(f"Error in calculating ideal_p0: {ideal_p0}\n"
+        raise Exception(f"Error in calculating data_error: prepared state is {prep_state}\n"
               "Returning p0s")
-        return data_obs, qs, ss.gaussian_kde(data_obs)
+    
+    flip_count = int(data_error * total_shots)
     
     print("------ Calculating the data distribution of error rates... ------")
-    sampled_gate_errors, d_pdf = gate_error_posterior(gate_num,total_shots,data_error_centre,num_samples)
+    sampled_gate_errors = gate_error_posterior_with_readout_noise(gate_num,prep_state,total_shots,flip_count,prior_errors,num_samples)
     print("------  Discovered the data distribution of error rates!   ------")
 
-    if len(sampled_gate_errors) != prior_noised_error:
-        raise Exception("prior and data distribution samples have different sizes... Error in calculating priors")
-
-    return sampled_gate_errors, prior_noised_error, d_pdf
-
+    return sampled_gate_errors
 
 
 def data_readout(qubit, datafile: str = '', data: np.ndarray = np.array([])):
@@ -232,7 +288,7 @@ def data_readout(qubit, datafile: str = '', data: np.ndarray = np.array([])):
     Function to readout json files or suitable numpy arrays
     """
 
-    if type(qubit) != int:
+    if type(qubit) != int and type(qubit) != str:
         raise Exception("Must supply an integer label for the interested qubit in `data_readout()`") 
 
     if datafile.endswith('.json'):
@@ -242,7 +298,7 @@ def data_readout(qubit, datafile: str = '', data: np.ndarray = np.array([])):
         
         epsilon01 = qubit_props[str(qubit)]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
         epsilon10 = qubit_props[str(qubit)]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
-        gate_epsilon = qubit_props[str(qubit)]['oneQubitFidelity'][0]['fidelity']
+        gate_epsilon = 1 - qubit_props[str(qubit)]['oneQubitFidelity'][0]['fidelity'] # Except here where we do! error = 1 - fidelity
 
     elif not (datafile or data):
         raise Exception("Error: No data or datafile provided for the `data_readout()`")
@@ -399,8 +455,8 @@ class SplitGateFilter:
         """
 
         try:
-            post_0 = self.meas_prior[f"Qubit{qubit_identity}"]['0']
-            post_1 = self.meas_prior[f"Qubit{qubit_identity}"]['1']
+            post_0 = self.meas_prior[f"Qubit{qubit_identity}"]["0"]
+            post_1 = self.meas_prior[f"Qubit{qubit_identity}"]["1"]
             
             # Create KDEs
             kde_0 = ss.gaussian_kde(post_0)
@@ -422,7 +478,7 @@ class SplitGateFilter:
             return None, None
 
     def inference(self,
-                  qubit_order,
+                  qubit_orders,
                   gate_type,
                   gate_num,
                   interested_circuits=[],
@@ -481,13 +537,17 @@ class SplitGateFilter:
             
             if (qubit_couplings) and (gate_type in ['CZ', 'iSWAP', 'CNOT']):
                 qubit_coupling_set = qubit_couplings[circuit_number]
+                qubit_order = qubit_orders[circuit_number]
             else:
                 qubit_coupling_set = None
+                qubit_order = qubit_orders
+
 
             print(f"Beginning Inference Run. Circuit index used: {circuit_number}.")
             # Loop over Qubits
 
             for idx,q in enumerate(qubit_order):
+                q = int(q)
                 print(f'--- Inferring Gate Errors for Qubit {q} ---')
 
                 # Determine a 'coupling key' to correspond to whether we have 2-qubit gate or not
@@ -496,7 +556,7 @@ class SplitGateFilter:
                     # Find which pair in the corresponding set in qubit_couplings contains q
                     found = False
                     for pair in qubit_coupling_set:
-                        if q in pair:
+                        if str(q) in pair:
                             qubit_couple_key = f"{pair[0]}-{pair[1]}"
                             found = True
                             break
@@ -533,6 +593,7 @@ class SplitGateFilter:
                     datafile = os.path.join(self.meas_cal_dir,'Braket_Qubit_Calibration.json')
                     cal_data = data_readout(q, datafile=datafile)
                     gate_center = cal_data[2] # 3rd element is gate error
+                    print(f"Loaded Qubit calibration from the Amazon Braket. The estimated gate error for {gate_type} is {gate_center:.3}")
                     if not loaded_priors:
                         try:
                             prior_errors[:, 0] = tnorm01(cal_data[0], meas_sd, size=nPrior) # Using calibrated priors based on AWS calibration
@@ -548,28 +609,32 @@ class SplitGateFilter:
                     else:
                         pass
 
-                except:
+                except Exception as e:
                     gate_center = 0.1 # Broad and poor default
                     print(f"Warning: Could not read calibration data for gate error on Qubit{q}.\n"
                           "Ensure that the Braket Calibration .json file is location in the SplitGateFilter.meas_cal_dir folder and named 'Braket_Qubit_Calibration.json'\n"
-                          f"Using default calibration value: {gate_center}.")
+                          f"Using default calibration value: {gate_center}: {e}")
                 
                 prior_errors[:, 2] = tnorm01(gate_center, gate_sd, size=nPrior)
-
+                qs = prior_errors[:, 2]
                 ### Run Rejection Sampling ###
 
                 # Calculate Densities
-                data_errors, qs, d_pdf = QoI_to_noised_errors(d_obs, prior_errors, total_shots, gate_type, gate_num)
-                d_pdf =  ss.gaussian_kde(data_errors) # Note that from QoI_to_noised_errors(), the data_errors array are samples drawn
+                data_errors = QoI_to_noised_errors(d_obs, prior_errors, total_shots, gate_type, gate_num)
+                d_pdf = ss.gaussian_kde(data_errors)
                 qs_ker = ss.gaussian_kde(qs)
-                
+
+                #########################
+                xs = np.linspace(0,0.05,10000)
+                plt.plot(xs,d_pdf(xs))
+                plt.plot(xs,qs_ker(xs))
+                plt.show()
+                #########################
+
+
                 # Find Maximum Ratio (Optimisation)
                 # Uses existing helper findM
-                max_r, max_q = findM(qs_ker, d_pdf) # Gate exp usually targets 0 or 1, check logic
-
-                print('Final Accepted Posterior Lambdas')
-                print('M: %.6g Maximizer: %.6g pi_obs = %.6g pi_Q(prior) = %.6g' %
-                (max_r, max_q, d_pdf(max_q), qs_ker(max_q)))
+                max_r = findGateM(qs_ker, d_pdf) # Gate exp usually targets 0 or 1, check logic
                 
                 # Rejection Sampling
                 r_vals = d_pdf(qs) / qs_ker(qs)
@@ -579,7 +644,14 @@ class SplitGateFilter:
                 post_err0 = post_errors[:,0]
                 post_err1 = post_errors[:,1]
                 post_gaterr = post_errors[:,2]
-                
+
+
+                if len(post_gaterr) == 0:
+                    print("   Warning: Rejection sampling rejected all points. Returning priors.")
+                    return post_errors, post_errors
+
+                print('   Accepted N: %d (%.1f%%)' % (len(post_gaterr), 100*len(post_gaterr)/len(prior_errors[0])))
+
                 # Initialise the post dictionaries, including the key to store the qubit data
                 q_key = f"Qubit{q}"
                 if q_key not in self.post_full: self.post_full[q_key] = {}
@@ -591,7 +663,7 @@ class SplitGateFilter:
                 # We store the samples in the post jsons
                 # Store with the coupling_key, denotating which connection is tested, otherwise just store as a dict:
 
-                if qubit_couple_key is not 'Single':
+                if qubit_couple_key != 'Single':
                     self.post_full[q_key][gate_type] = {'FULL_GATE_ERROR': post_gaterr,
                         'FULL_MEAS0_ERROR': post_err0,
                         'FULL_MEAS1_ERROR': post_err1}
@@ -614,7 +686,7 @@ class SplitGateFilter:
                         'MEAS1_ERR_MODE': float(ss.mode(post_err1)[0])}
                     
                 
-                print(f"-> Inferred {len(post_errors)} samples for Qubit{q_key} ({qubit_couple_key})")
+                print(f"-> Inferred {len(post_errors)} samples for {q_key} ({qubit_couple_key})")
 
                 if plotting:
                     post_ker = ss.gaussian_kde(post_gaterr)
