@@ -309,7 +309,7 @@ class SplitMeasFilter:
             } for q in self.qubit_order}
 
         self.data = {'0': np.array([]), '1': np.array([])}
-        if data is not None:
+        if data.size != 0:
             if isinstance(data, dict):
                 self.data = data
             else:
@@ -434,12 +434,13 @@ class SplitMeasFilter:
             return prior_error_rates, prior_error_rates
 
         print('   Accepted N: %d (%.1f%%)' % (len(post_error_rates), 100*len(post_error_rates)/M))
-        
-
 
         # Save
         filename = State_Data_address + f'Post_Qubit{qubit}.csv'
-        np.savetxt(filename, post_error_rates, delimiter=',')
+        try:
+            np.savetxt(filename, post_error_rates, delimiter=',')
+        except Exception as ex:
+            print(f"Could not save posterior to {filename}, perhaps already saved posteriors?: {ex}")
 
         return prior_error_rates, post_error_rates
 
@@ -459,7 +460,7 @@ class SplitMeasFilter:
         path0 = os.path.join(self.file_address, 'State0.csv')
         if os.path.exists(path0):
             try:
-                self.data['0'] = np.loadtxt(path0, dtype = float,delimiter=',')
+                self.data['0'] = np.loadtxt(path0, dtype = int, delimiter=',')
                 print(f"Loaded {np.size(self.data['0'],axis=0)} shots for State 0.")
             except Exception as e:
                 print(f"Error reading {path0}: {e}")
@@ -470,7 +471,7 @@ class SplitMeasFilter:
         path1 = os.path.join(self.file_address, 'State1.csv')
         if os.path.exists(path1):
             try:
-                self.data['1'] = np.loadtxt(path1, dtype = float,delimiter=',')
+                self.data['1'] = np.loadtxt(path1, dtype = int,delimiter=',')
                 print(f"Loaded {np.size(self.data['1'],axis=0)} shots for State 1.")
             except Exception as e:
                 print(f"Error reading {path1}: {e}")
@@ -519,6 +520,12 @@ class SplitMeasFilter:
         
             print(f'Inferring Qubit {q} for State |{prep_state}>')
             
+            if f"Qubit{q}" not in self.prior:
+                self.post[f'Qubit{q}'] = {}
+            if f"Qubit{q}" not in self.post_full:
+                self.post_full[f'Qubit{q}'] = {'0': np.array([]), '1': np.array([])}
+            if f"Qubit{q}" not in self.prior:
+                self.prior[f'Qubit{q}'] = np.array([])
             try:
                 d = getData0(current_data, idx)
             except Exception as e:
@@ -536,6 +543,7 @@ class SplitMeasFilter:
                 )                
                 self.prior[f'Qubit{q}'] = prior_lambdas
                 self.post_full[f'Qubit{q}'][prep_state] = post_lambdas
+                print(f'   Qubit{q} has a mean error rate from the prepared state of {prep_state} of {np.mean(post_lambdas):.5}')
             except Exception as e:
                 print(f"   Inference failed for Qubit {q}: {e}")
                 
@@ -899,30 +907,34 @@ class SplitMeasFilter:
                 if err0_samples.any():
                     # Plot Error 0 (Readout error on |0>)
                     kde0 = ss.gaussian_kde(err0_samples)
-                    plt.plot(xs, kde0(xs), color='blue', label=r'$P(1|0)$ (Error on 0)')
+                    plt.plot(xs, kde0(xs), color='blue', label=r'Posterior Error on 0', alpha = 0.2)
                     plt.fill_between(xs, kde0(xs), alpha=0.2, color='blue')
 
                     # Plot Data KDE for comparison
-                    d0 = getData0(self.data.get('0', np.array([])), idx)
+                    raw_data = self.data.get('0', np.array([]))
+                    total_shots = np.size(raw_data,axis=0)
+                    d0 = getData0(raw_data, idx)
                     err0 = 1 - d0
 
-                    d0_ker = ss.gaussian_kde(err0)
-                    plt.plot(xs, d0_ker(xs), color='darkslateblue', linestyle='--', label='Data KDE (State |0>)')
-                    plt.fill_between(xs, d0_ker(xs), alpha=0.1, color='darkslateblue')
+                    def d0_pdf(x): return ss.beta.pdf(x, (err0*total_shots) + 1, total_shots*(1 - err0) + 1)
+                    plt.plot(xs, d0_pdf(xs), color='darkslateblue', linestyle='--', label='Data KDE (State |0>)')
+
 
                 if err1_samples.any():
                     # Plot Error 1 (Readout error on |1>)
                     kde1 = ss.gaussian_kde(err1_samples)
-                    plt.plot(xs, kde1(xs), color='red', label=r'$P(0|1)$ (Error on 1)')
+                    plt.plot(xs, kde1(xs), color='red', label=r'Posterior Error on 1', alpha = 0.2)
                     plt.fill_between(xs, kde1(xs), alpha=0.2, color='red')
 
                     # Plot Data KDE for comparison
-                    d1 = getData0(self.data.get('1', np.array([])), idx)
+                    raw_data = self.data.get('1', np.array([]))
+                    total_shots = np.size(raw_data,axis=0)
+                    d1 = getData0(raw_data, idx)
                     err1 = d1
 
-                    d1_ker = ss.gaussian_kde(err1)
-                    plt.plot(xs, d1_ker(xs), color='firebrick', linestyle='--', label='Data KDE (State |1>)')
-                    plt.fill_between(xs, d1_ker(xs), alpha=0.1, color='firebrick')
+                    def d1_pdf(x): return ss.beta.pdf(x, (err1*total_shots) + 1, total_shots*(1 - err1) + 1)
+                    plt.plot(xs, d1_pdf(xs), color='firebrick', linestyle='--', label='Data KDE (State |1>)')
+
 
                 plt.title(f'Posterior Error Distributions - Qubit {q}')
                 plt.xlabel('Error Rate')
