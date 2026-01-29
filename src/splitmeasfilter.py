@@ -219,9 +219,32 @@ def meas_data_readout(qubit, prep_state:str = '', datafile:str = ''):
         with open(str(datafile), 'r') as file:
             data = json.load(file)
         qubit_props = data['oneQubitProperties']
-        
-        epsilon01 = qubit_props[str(qubit)]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate... Except for ankaa-3 where we do
-        epsilon10 = qubit_props[str(qubit)]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate... Except for ankaa-3 where we do
+
+        try:
+            zero_error_entry = qubit_props[str(qubit)]['oneQubitFidelity'][1]
+            one_error_entry  = qubit_props[str(qubit)]['oneQubitFidelity'][2]
+            if  ((zero_error_entry['fidelityType']['name'] == 'READOUT_ERROR_0_TO_1') and 
+                 (one_error_entry['fidelityType']['name'] == 'READOUT_ERROR_1_TO_0')):
+                
+                epsilon01 = zero_error_entry['fidelity'] # Notice that even though it says "fidelity", we get error rate... Except for ankaa-3 where we do
+                epsilon10 = one_error_entry['fidelity'] # Notice that even though it says "fidelity", we get error rate... Except for ankaa-3 where we do
+            else:
+                pass
+            
+        except:
+            pass # Just means we didn't get the correct format!
+
+        try: 
+            readout_error_entry = qubit_props[str(qubit)]['oneQubitFidelity'][2]
+
+            if readout_error_entry['fidelityType']['name'] == 'READOUT':
+                epsilon01 = readout_error_entry['fidelity']
+                epsilon10 = readout_error_entry['fidelity']
+            else:
+                raise Exception("Couldn't properly parse the Braket calibration file, which should be functional for IQM and Rigetti systems as of 29/01/2026")
+        except:
+            raise Exception("Couldn't properly parse the Braket calibration file, which should be functional for IQM and Rigetti systems as of 29/01/2026")
+
 
     elif not datafile:
         raise Exception("Error: No data or datafile provided for the `meas_data_readout()`")
