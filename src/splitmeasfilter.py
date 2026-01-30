@@ -13,8 +13,9 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import scipy.stats as ss
-from scipy.optimize import minimize
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from aquarel import load_theme
 
@@ -218,9 +219,32 @@ def meas_data_readout(qubit, prep_state:str = '', datafile:str = ''):
         with open(str(datafile), 'r') as file:
             data = json.load(file)
         qubit_props = data['oneQubitProperties']
-        
-        epsilon01 = qubit_props[str(qubit)]['oneQubitFidelity'][1]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
-        epsilon10 = qubit_props[str(qubit)]['oneQubitFidelity'][2]['fidelity'] # Notice that even though it says "fidelity", we get error rate...
+
+        try:
+            zero_error_entry = qubit_props[str(qubit)]['oneQubitFidelity'][1]
+            one_error_entry  = qubit_props[str(qubit)]['oneQubitFidelity'][2]
+            if  ((zero_error_entry['fidelityType']['name'] == 'READOUT_ERROR_0_TO_1') and 
+                 (one_error_entry['fidelityType']['name'] == 'READOUT_ERROR_1_TO_0')):
+                
+                epsilon01 = zero_error_entry['fidelity'] # Notice that even though it says "fidelity", we get error rate... Except for ankaa-3 where we do
+                epsilon10 = one_error_entry['fidelity'] # Notice that even though it says "fidelity", we get error rate... Except for ankaa-3 where we do
+            else:
+                pass
+            
+        except:
+            pass # Just means we didn't get the correct format!
+
+        try: 
+            readout_error_entry = qubit_props[str(qubit)]['oneQubitFidelity'][2]
+
+            if readout_error_entry['fidelityType']['name'] == 'READOUT':
+                epsilon01 = readout_error_entry['fidelity']
+                epsilon10 = readout_error_entry['fidelity']
+            else:
+                raise Exception("Couldn't properly parse the Braket calibration file, which should be functional for IQM and Rigetti systems as of 29/01/2026")
+        except:
+            raise Exception("Couldn't properly parse the Braket calibration file, which should be functional for IQM and Rigetti systems as of 29/01/2026")
+
 
     elif not datafile:
         raise Exception("Error: No data or datafile provided for the `meas_data_readout()`")
@@ -228,9 +252,16 @@ def meas_data_readout(qubit, prep_state:str = '', datafile:str = ''):
         raise Exception("Must either:\nsupply datafile as path string to a json data file, i.e. '../data/datafile.json'\nor supply a nx3 numpy array with 0 -> 1 errors, 1 -> 0 errors, and gate errors in each row (ONLY AVAILABLE FOR SINGLE QUBIT GATES)")
 
     if prep_state == '0':
-        return epsilon01
+        epsilon = epsilon01
     else:
-        return epsilon10
+        epsilon = epsilon10
+    
+    if epsilon < 0.5:
+        return epsilon
+    elif epsilon >= 0.5:
+        return 1 - epsilon
+    else:
+        raise Exception("Error in calculating the value of the error rate, either as a fidelity or an error rate.")
 
 class SplitMeasFilter:
     """A scalable and accurate measurement error object, 
