@@ -724,7 +724,7 @@ class SplitGateFilter:
                     
                     xsd = np.linspace(0,0.2,2000)
                     plt.figure(figsize=(width, height), dpi=120, facecolor='white')
-                    plt.plot(xsd, d_pdf(xsd), color='Red', linestyle='dashed', linewidth=3, label=r'$\pi^{\mathrm{obs}}_{\mathcal{D}}$')
+                    plt.plot(xsd, d_pdf(xsd), color='Red', linestyle='dashed', linewidth=3, label=r'$\pi$')
                     plt.plot(xsd, post_ker(xsd), color='Blue', label=r'$\pi_{\mathcal{D}}^{Q(\mathrm{post})}$')
                     plt.xlabel('Pr(Meas. 0)')
                     plt.ylabel('Density')
@@ -753,16 +753,16 @@ class SplitGateFilter:
             meanmode_path_current = os.path.join(self.data_file_address, f'Post_Gate_MeanMode_Current.json')
             
             with open(full_path_datetime, 'w') as f:
-                json.dump(self.post_full, f, cls=NumpyEncoder)
+                json.dump(self.post_full, f, cls=NumpyEncoder, indent=4)
 
             with open(meanmode_path_datetime, 'w') as f:
-                json.dump(self.post, f, cls=NumpyEncoder)
+                json.dump(self.post, f, cls=NumpyEncoder, indent=4)
 
             with open(full_path_current, 'w') as f:
-                json.dump(self.post_full, f, cls=NumpyEncoder)
+                json.dump(self.post_full, f, cls=NumpyEncoder, indent=4)
 
             with open(meanmode_path_current, 'w') as f:
-                json.dump(self.post, f, cls=NumpyEncoder)
+                json.dump(self.post, f, cls=NumpyEncoder, indent=4)
 
             print(f"Saved Full Gate Posterior to:\n{full_path_datetime}\nand\n{full_path_current}")
             print(f"Saved Mean/Mode Gate Summary to:\n{meanmode_path_datetime}\nand\n{meanmode_path_current}")
