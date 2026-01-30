@@ -298,15 +298,28 @@ class SplitMeasFilter:
         # Check if data was loaded successfully (checks the first qubit's size)
         last_q = f'Qubit{self.qubit_order[-1]}'
         if self.post_full[last_q]['0'].size > 0 and self.post_full[last_q]['1'].size > 0:
-            self.create_filter_mat() 
-            
-            # Calculate mean/mode from the loaded full data
-            self.post = {f'Qubit{q}': {
-                'e0_mean': float(np.mean(self.post_full[f'Qubit{q}']['0'])), 
-                'e1_mean': float(np.mean(self.post_full[f'Qubit{q}']['1'])),
-                'e0_mode': float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]), 
-                'e1_mode': float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]),
-            } for q in self.qubit_order}
+            self.create_filter_mat()
+
+            for q in self.qubit_order: 
+                data0_array = self.post_full[f'Qubit{q}']['0']
+                data0_tuple = tuple(data0_array)
+                data1_array = self.post_full[f'Qubit{q}']['1']
+                data1_tuple = tuple(data1_array)
+                
+                # Calculate mean/mode from the loaded full data
+                self.post = {f'Qubit{q}': {
+                    'e0_mean': float(np.mean(data0_array)),
+                    'e1_mean': float(np.mean(data1_array)),
+
+                    'e0_mode': float(ss.mode(data0_array)[0]),
+                    'e1_mode': float(ss.mode(data1_array)[0]),
+
+                    'e0CI95' : (float(ss.bootstrap(data0_tuple, np.mean, confidence_level=0.95, method='percentile').confidence_interval.low),
+                                    float(ss.bootstrap(data0_tuple, np.mean, confidence_level=0.95, method='percentile').confidence_interval.high)),
+
+                    'e1CI95' : (float(ss.bootstrap(data1_tuple, np.mean, confidence_level=0.95, method='percentile').confidence_interval.low),
+                                    float(ss.bootstrap(data1_tuple, np.mean, confidence_level=0.95, method='percentile').confidence_interval.high)),
+                } }
 
         self.data = {'0': np.array([]), '1': np.array([])}
         if data.size != 0:
@@ -556,11 +569,21 @@ class SplitMeasFilter:
             self.create_filter_mat()
 
         if has_0:
-            for q in self.qubit_order: self.post[f'Qubit{q}']['e0_mean'] = float(np.mean(self.post_full[f'Qubit{q}']['0']))
-            for q in self.qubit_order: self.post[f'Qubit{q}']['e0_mode'] = float(ss.mode(self.post_full[f'Qubit{q}']['0'])[0]) 
+            for q in self.qubit_order: 
+                data_array = self.post_full[f'Qubit{q}']['0']
+                data_tuple = tuple(data_array)
+                self.post[f'Qubit{q}']['e0_mean'] = float(np.mean(data_array))
+                self.post[f'Qubit{q}']['e0_mode'] = float(ss.mode(data_array)[0])
+                self.post[f'Qubit{q}']['e0CI95']  = (float(ss.bootstrap(data_tuple, np.mean, confidence_level=0.95, method='percentile').confidence_interval.low),
+                                    float(ss.bootstrap(data_tuple, np.mean, confidence_level=0.95, method='percentile').confidence_interval.high))
         elif has_1:
-            for q in self.qubit_order: self.post[f'Qubit{q}']['e1_mean'] = float(np.mean(self.post_full[f'Qubit{q}']['1']))
-            for q in self.qubit_order: self.post[f'Qubit{q}']['e1_mode'] = float(ss.mode(self.post_full[f'Qubit{q}']['1'])[0]) 
+            for q in self.qubit_order: 
+                data_array = self.post_full[f'Qubit{q}']['1']
+                data_tuple = tuple(data_array)
+                self.post[f'Qubit{q}']['e1_mean'] = float(np.mean(data_array))
+                self.post[f'Qubit{q}']['e1_mode'] = float(ss.mode(data_array)[0])
+                self.post[f'Qubit{q}']['e1CI95']  = (float(ss.bootstrap(data_tuple, np.mean, confidence_level=0.95, method='percentile').confidence_interval.low),
+                                    float(ss.bootstrap(data_tuple, np.mean, confidence_level=0.95, method='percentile').confidence_interval.high))
 
         print("Inference Complete, Saving Results...")
 
@@ -572,16 +595,16 @@ class SplitMeasFilter:
 
         # Save using the NumpyEncoder
         with open(full_path_datetime, 'w') as f:
-            json.dump(self.post_full, f, cls=NumpyEncoder)
+            json.dump(self.post_full, f, cls=NumpyEncoder, indent=4)
 
         with open(meanmode_path_datetime, 'w') as f:
-            json.dump(self.post, f, cls=NumpyEncoder)
+            json.dump(self.post, f, cls=NumpyEncoder, indent=4)
 
         with open(full_path_current, 'w') as f:
-            json.dump(self.post_full, f, cls=NumpyEncoder)
+            json.dump(self.post_full, f, cls=NumpyEncoder, indent=4)
 
         with open(meanmode_path_current, 'w') as f:
-            json.dump(self.post, f, cls=NumpyEncoder)
+            json.dump(self.post, f, cls=NumpyEncoder, indent=4)
 
         print(f"Saved Full Posterior to:\n{full_path_datetime}\nand\n{full_path_current}")
         print(f"Saved Mean/Mode Summary to:\n{meanmode_path_datetime}\nand\n{meanmode_path_current}")
