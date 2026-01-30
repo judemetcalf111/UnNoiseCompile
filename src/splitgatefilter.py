@@ -136,7 +136,7 @@ def gate_error_posterior_with_readout_noise(
     
     # 1. Define the Grid for Gate Error p
     # Use geomspace for precision near zero
-    p_grid = np.geomspace(1e-9, 0.4999, 5000)
+    p_grid = np.geomspace(1e-12, 0.1, 50000)
     
     # 2. Pre-calculate the Ideal Theory (State Probability)
     # Probability of the state being flipped after N gates (without readout noise)
@@ -253,14 +253,14 @@ def QoI_to_noised_errors(data_obs: float, prior_errors: np.ndarray, total_shots,
     """
     num_samples = prior_errors.shape[0]
     
-    gates = ['RY', 'RX', 'RZ', 'CZ', 'X', 'Y']
+    gates = ['RY', 'RX', 'RZ', 'CZ', 'iSWAP', 'X', 'Y']
     
     if (gate_type == 'X') or (gate_type == 'RX') or (gate_type == 'CZ') or (gate_type == 'RY') or (gate_type == 'RY'):
         if (gate_num % 2 == 0):
             prep_state = '0'
         else:
             prep_state = '1'
-    elif gate_type == 'RZ':
+    elif gate_type == 'RZ' or gate_type == 'iSWAP':
         prep_state = '0'
     else:
         raise Exception(f"Gate Type {gate_type} not recognised, recognised gates are: {gates}")
@@ -621,11 +621,12 @@ class SplitGateFilter:
 
                 # Calculate Densities
                 data_errors = QoI_to_noised_errors(d_obs, prior_errors, total_shots, gate_type, gate_num)
+                print(np.mean(data_errors))
                 d_pdf = ss.gaussian_kde(data_errors)
                 qs_ker = ss.gaussian_kde(qs)
 
                 #########################
-                xs = np.linspace(0,0.05,10000)
+                xs = np.linspace(0,0.001,10000)
                 plt.plot(xs,d_pdf(xs))
                 plt.plot(xs,qs_ker(xs))
                 plt.show()

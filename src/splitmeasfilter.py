@@ -14,8 +14,8 @@ import pandas as pd
 import numpy as np
 import scipy.stats as ss
 
-import matplotlib
-matplotlib.use('Agg')
+# import matplotlib
+# matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from aquarel import load_theme
 
@@ -313,13 +313,15 @@ class SplitMeasFilter:
 
         self.file_address = file_address
         self.qubit_order = [int(q) for q in qubit_order]
+
+        self.load_data = load_data
         
         self.prior = {f'Qubit{q}': np.array([]) for q in qubit_order}
         self.post_full = {f'Qubit{q}': {'0': np.array([]), '1': np.array([])} for q in self.qubit_order}
         self.post = {f'Qubit{q}': {} for q in self.qubit_order}
         full_post_path = Path(os.path.join(self.file_address, 'Post_Full_Current.json'))
         
-        if full_post_path.is_file() and load_data == True: self._load_historical_data(full_post_path)
+        if full_post_path.is_file() and self.load_data == True: self._load_historical_data(full_post_path)
             
         # Device calibration loading
         self.params = None # Use must define, if they intend to not use the braket .json
@@ -537,6 +539,9 @@ class SplitMeasFilter:
         None.
 
         """
+        full_post_path = Path(os.path.join(self.file_address, 'Post_Full_Current.json'))
+        if full_post_path.is_file() and self.load_data == True: self._load_historical_data(full_post_path)
+        
         # Select Data
         current_data = self.data.get(prep_state, np.array([]))
         total_shots = np.size(current_data,axis=0)
@@ -900,7 +905,7 @@ class SplitMeasFilter:
             lam0_samples = self.post_full[q_key]['0'] if '0' in self.post_full[q_key] else np.array([])
             lam1_samples = self.post_full[q_key]['1'] if '1' in self.post_full[q_key] else np.array([])
             
-            if (not lam0_samples.any()) and (not lam1_samples):
+            if (not lam0_samples.any()) and (not lam1_samples.any()):
                 print(f"Skipping Qubit {q}: Inference not complete.")
                 continue
             elif (not lam0_samples.any()) or (not lam1_samples.any()):
