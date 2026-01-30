@@ -14,31 +14,40 @@ Project_Root/
 │
 ├── notebooks/
 │   ├── notebook1.ipynb
-│   └── notebook2.ipynb        <-- Any notebooks to run scripts, gather AWS data, inference, etc.
+│   └── notebook2.ipynb        <-- Any notebooks to run scripts
 │
 ├── src/
 │   ├── __init__.py
+│   ├── graphconnector.py      <-- Build Graphs for 2-Qubit Gates
 │   ├── splitmeasfilter.py     <-- Measurement Error & Inference
-│   └── splitgatefilter.py     <-- Gate Error & Inference, Incorporating Measurement Errors from splitmeasfilter.py
+│   └── splitgatefilter.py     <-- Gate Error & Inference
 │
 ├── data/
-│   ├── meas_cal/              <-- Output folder for MeasFilter
-│   └── gate_exp/              <-- Output folder for GateFilter
+│   ├── *meas_cal*/             <-- Output folder for MeasFilter
+│   └── *gate_exp*/             <-- Output folder for GateFilter
 │
 └── results/                   <-- Final plots and reports
 ```
 
 ## Getting Started
 \
-Built using Python 3.11.14, mostly using Jupyter notebooks in `/notebooks` and `/scripts/` and Python modules in `/src`. To make a .venv: 
+Python modules built using Python 3.11.14 in `/src`, with notebooks and samples written mostly using Jupyter notebooks in `/notebooks` and `/scripts/`. 
+
+First, to make a .venv file as a virtual environment (use Python3.11 for Qiskit compatibility): 
 
 `python3.11 -m venv .venv`
 
 Activate:
 
+Linux/OS X:\
 `source .venv/bin/activate`
 
-Then install packages:
+
+Windows Command Prompt:\
+`.venv\Scripts\activate.bat`
+
+
+Then install packages using pip:
 
 `pip install -r requirements.txt`
 
@@ -52,31 +61,33 @@ And run from there!
 
 ### 1. Measurement Data
 
-You can either supply probing bitstring data into the `SplitMeasFilter` class directly, using an array-like parameter called `data`, filled with bitstrings, or by placing a csv file named `Filter_data.csv` in the path defined by the `file_address` parameter. If both are given, the class will use the `data` object.
+You can supply bitstring data, in the form of the `QuantumTask.result().measurements` available from the Amazon Braket API into the `SplitMeasFilter` by placing a csv file named `State0.csv` defining the a nontrivial groundstate measurement in the path defined by the `file_address` parameter. Similarly, one should place `State1.csv`, a csv file containing the bits recieved from a nontrivial flip.
 
-The script is designed to run inference on data gathered from an expected |000...000> state and an expected |111...111> state individually. This will allow the inference of bitflip error rates in both directions (both towards and away from the ground-state)
+The script is designed to run inference on data gathered from an expected |000...000> state and an expected |111...111> state individually. This is due to the fact that measurement errors will generally be asymmetric, according to the physics of the QPU system. `|0>` is often a ground state, and relaxes more often than exciting to the `|1>` state, for example. Thus, we run two rounds of inference to understand these asymmetric properties.
 
+Here is a sample of how one is to use the `SplitMeasFilter` Python Class, designed to infer posterior distributions of these errors, and efficiently filter these errors from given quantum data.
 
 ```python
 from src.splitmeasfilter import SplitMeasFilter
 
-# Define Qubits and Data/Path
+# Define measurement order of qubits
+# VERY important, to ensure that the order of the data recieved is the order that AWS produced
+# More often than not for complex circuits, this will not be in ascending order!
+# Find through running `QuantumTask.result().measured_qubits` in the Braket API
 qubits = [0, 1, 6]
 
-# 1a. Define directory containing `Filter_data.csv`
+# Define whichever directory contains both `State0.csv` and `State1.csv` (or only one if that alone is given)
 meas_path = './data/meas_cal/'
 
-# 1b. Or we can Define an array-like object of the same bitstring data
-meas_data = ['011110','111110','110110','010010','111111','111101','110100',...]
-
-# 2a. Instantiate Data (from `Filter_data.csv` file)
-meas_filter = SplitMeasFilter(qubit_order=qubits, file_address=meas_path)
-
-# 2b. Instantiate Data (from array-like `meas_data` object)
-meas_filter = SplitMeasFilter(qubit_order=qubits, data=meas_data)
+# Instantiate Data (from `State0.csv` and `State1.csv` files)
+meas_filter = SplitMeasFilter(qubit_order=qubits,    # Qubit order as above
+                             file_address=meas_path, # Location of data as above
+                             load_data=True,         # (optional) Load posteriors from previous inference trials
+                             home_dir='.'            # (optional) Define the working directory
+                             )
 ```
 \
-We can then run inference on this data. Ensure that you track the number of shots, as this will divide the total into several batches, each of size 'shots_per_point':
+We can then run inference on this data:
 
 ```python
 # Applying the meas_filter.inference() function
@@ -89,9 +100,33 @@ meas_filter.inference(nPrior=40000,          # Number of tested error rates
                         shots_per_point=1024,# Number of shots in each batch
                         seed=28,             # Seed for the rejection sampling
                         prep_state='0')      # Prepared state (for |0> or |1>)
+
+meas_filter.qubit_order = [1,0]
+
+meas_filter.inference(nPrior=40000,          # Number of tested error rates
+                        prior_sd=0.1,        # The sd of the prior distribution
+                        shots_per_point=1024,# Number of shots in each batch
+                        seed=28,             # Seed for the rejection sampling
+                        prep_state='1')      # Prepared state (for |0> or |1>)
 ``` 
 \
-This will produce files `State0_Post_Qubit0.csv`, `State0_Post_Qubit1.csv`, and `State0_Post_Qubit6.csv`, which contain the posterior distributions of measurement errors, in the form of rejection-sampled error rates. This will output plots of observed data against the posterior model. To reproduce these, along with the distribution statistics, and optionally save, run:
+This will produce files in a dedicated `Posterior Data` directory located in the directory specified by the `file_address` parameter:\
+`State0_Post_Qubit0.csv`,\
+`State0_Post_Qubit1.csv`,\
+`State0_Post_Qubit6.csv`,\
+`State1_Post_Qubit1.csv`,\
+`State1_Post_Qubit0.csv`,
+
+Which are sampled arrays from posterior distribution of error rates for each qubit and each state we inferred on. We also recieve the full data in the form of an easy to load (and read) JSON file, both containing full distributions as above and summary statistics (mean, mode, and confidence interval). These are found both timestamped to retain copies of data, along with the latest run marked as:
+
+`Post_Full_Current.json`\
+`Post_MeanMode_Current.json`
+
+Alongside the data, the psterior distributions will be saved as plots in the same `file_address` directory as 
+
+
+
+ which contain the posterior distributions of measurement errors, in the form of rejection-sampled error rates. This will output plots of observed data against the posterior model. To reproduce these, along with the distribution statistics, and optionally save, run:
 ```python
 meas_filter.error_distributions(plotting=True, save_plots=True)
 ```
