@@ -122,36 +122,57 @@ Which are sampled arrays from posterior distribution of error rates for each qub
 `Post_Full_Current.json`\
 `Post_MeanMode_Current.json`
 
-Alongside the data, the psterior distributions will be saved as plots in the same `file_address` directory as 
+Alongside the data, the posterior distributions will be saved as plots in the same `file_address` directory, named as:\
+`ErrorDist_Qubit{QUBIT_NUMBER}.pdf`
 
+For example, here is a plot that may have been produced by the above script:
 
+<img src="resources/ErrorDist_Qubit1.png" width="600" />
 
- which contain the posterior distributions of measurement errors, in the form of rejection-sampled error rates. This will output plots of observed data against the posterior model. To reproduce these, along with the distribution statistics, and optionally save, run:
+which contain the posterior distributions of measurement errors, in the form of rejection-sampled error rates. To reproduce these plots, along with printing a full description of all distribution statistics, and optionally save, run:
+
 ```python
 meas_filter.error_distributions(plotting=True, save_plots=True)
 ```
-And this will produce the error rate variables in the `MeasFilter` class. The following gives the `p(0|0)` error rate for Qubit0:
+And this will produce the error rate variables in the `MeasFilter` class. If the `SplitMeasFilter` object is already loaded in, one can access the full posteriors (for example for Qubit 0) without loading a `.csv` with the following nested dictionaries `post_full` and `post`:
 ```python
-meas_filter.post_marginals['Qubit0']['0']
+Qubit0_error_0_array = meas_filter.post_full['Qubit0']['0']
+Qubit0_error_1_array = meas_filter.post_full['Qubit0']['1']
+```
+And the summary statistics:
+```python
+Qubit0_error_0_mean = meas_filter.post['Qubit0']['e0mean']
+Qubit0_error_0_mode = meas_filter.post['Qubit0']['e0mode']
+Qubit0_error_0_CI = meas_filter.post_full['Qubit0']['e0CI95']
 ```
 
 ### 2. Gate Data
 
-#### 2a. Designing a Testing Circuit
+#### 2a. Considering a Testing Circuit
 
-It is not a trivial problem to design an efficient circuit to test 2-qubit gates. If the _Controlled-Z_ gate is the native 2-qubit gate (as for most superconducting QPUs at the time of writing in January of 2026), there is no direction to the gate, so _CZ[Q1-Q2]_ is the same as _CZ[Q2-Q1]_, so we need only test every connection between qubits. However, the superconducting qubits are arranged in somewhat complex arrangements on a cartesian grid, with a maximum connectivity of any qubit being 4. We need to construct 4 circuits, where each _CZ_ connection is tested in at least one of these circuits.
+It is not a trivial problem to design an efficient circuit to test 2-qubit gates. First we discuss which 2-qubit gates we can test:
 
-As this problem is equivalent to the maximal edge-colouring problem from graph theory, there are many algorithms which have been developed to efficiently generate solutions to this exact problem, 'colouring' each connection at least once, and if possible, multiple times. Using graph theory, we can also say that since the qubits are arranged on a grid, it is a bipartite graph, and thus by König's Theorem it is class 1, and only 4 circuits (and not 5) are required (for this idea, see Vizing's Theorem).
+If the _Controlled-Z_ gate is the native 2-qubit gate (as for most superconducting QPUs at the time of writing in January of 2026), there is no direction to the gate, so _CZ[Q1-Q2]_ is the same as _CZ[Q2-Q1]_, so we need only test every connection between qubits. Also, the _CZ_ gate will act on basis states only by adding a total phase, so under our bitflip assumption it is relatively easy to isolate individual qubit error rates.
 
-**The** `graphconnector.py` **script and its `MisraGriesSolver` class is an implementation using Kempe Chains in the Misra-Gries algorithm and graph reordering to produce valid data aand maximise data quality and efficiency.**
+If the _iSWAP_ gate is the native 2-qubit gate (for instance on Rigetti's Ankaa-3), then there is also no direction, and iSWAP[Q1-Q2]_ is the same as _iSWAP[Q2-Q1]_. However, the _iSWAP_ gate works on basis states by flipping the value of each qubit it acts on, and adding a phase. This makes isolating individual qubit error rates intractable, especially if many gates must be tested with high measurement error rates (unfortunately both are the case as of January 2026 for testing Ankaa-3!).
+
+Single qubit gates are relatively simple to test. One runs a verbatim test, and ensures that the number of gates matches the circuit, and inputs the gate type and the number of gates. All standard native single qubit gates (full rotation gates) are considered in the module, and the expected state is automatically calculated and inferred against
+
+#### 2b. Designing a 2-Qubit Testing Circuit
+
+However, superconducting qubits are often arranged in somewhat complex arrangements on a cartesian grid, with a connectivity of any qubit being anywhere from 1 to 4. The arrangements can also change if the QPU has been calibrated and qubits removed or disconnected. We will then need to construct 4 circuits, where each 2-qubit connection is tested in at least one of these 4 circuits.
+
+As this problem is equivalent to the maximal edge-colouring problem from graph theory, there are many algorithms which have been developed to efficiently generate solutions to this exact problem, 'colouring' each connection at least once, and if possible, multiple times, to design 4 circuits which will connect all qubits between them. Using graph theory, we can also say that since the qubits are arranged on a grid, it is a bipartite graph, and thus by König's Theorem it is class 1, and only 4 circuits (and not 5) are required (for this idea, see Vizing's Theorem).
+
+**The** `graphconnector.py` **script and its `MisraGriesSolver` class is an implementation using Kempe Chains in the Misra-Gries algorithm and graph reordering to produce valid data and maximise data quality and efficiency.**
 
 We use the Misra-Gries Edge-Colouring Algorithm, which is efficient of order $\mathcal{O}(N \times E) \equiv \mathcal{O}(N ^ 2)$, of order 'N' number of qubits multiply 'E' number of edges (here qubit coupling). This will be very efficient for NISQ QPUs, and can be improved if the number of circuits can be increased from 4 to 5, or shots become less expensive, wherein finding these graphs becomes easier. 
 
-We here minimise the number of circuits to 4 (which will be either 4 or 5 in a grid-like construction as in current superconducting QPUs), and add in redundant extra CZ tests to infer the gate error even better with limited shots.
+We here minimise the number of circuits to 4 (which will be either 4 or 5 in a grid-like construction as in current superconducting QPUs), and add in redundant extra qubit calibration coupling tests to infer the gate error with higher accuracy with limited shots.
 
 Below are 2-qubit CZ testing circuit examples from IQM Emerald and Rigetti Ankaa-3. Each have 4 circuits, with red edges being active CZ gates in the circuit, to be run some number of times to determine bit-flip error. An 'Efficiency' is given in the top left of each circuit, which gives the proportion of qubits active in a CZ gate, thus from whom error data can be gathered. Additional statistics concerning the graphs, total CZ gates tested, redundnacy, and time taken to produce them are given in the Ankaa-3 graphs:
 
-##### **IQM Garnet:**
+##### **IQM Emerald:**
 | | |
 |:---:|:---:|
 | <img src="resources/Emerald0.png" width="400" /> | <img src="resources/Emerald1.png" width="400" /> |
