@@ -39,7 +39,7 @@ First, to make a .venv file as a virtual environment (use Python3.11 for Qiskit 
 
 Activate:
 
-Linux/OS X:\
+Linux/macOS:\
 `source .venv/bin/activate`
 
 
@@ -173,11 +173,17 @@ We here minimise the number of circuits to 4 (which will be either 4 or 5 in a g
 Below are 2-qubit CZ testing circuit examples from IQM Emerald and Rigetti Ankaa-3. Each have 4 circuits, with red edges being active CZ gates in the circuit, to be run some number of times to determine bit-flip error. An 'Efficiency' is given in the top left of each circuit, which gives the proportion of qubits active in a CZ gate, thus from whom error data can be gathered. Additional statistics concerning the graphs, total CZ gates tested, redundnacy, and time taken to produce them are given in the Ankaa-3 graphs:
 
 ##### **IQM Emerald:**
+_____________
+_Note that the top left corners of each qubit connection graph displays the 'efficiency.' This refers to the number of qubits which are probed in that circuit (0.0 being none, 1.0 being all)._
+_____________
 | | |
 |:---:|:---:|
 | <img src="resources/Emerald0.png" width="400" /> | <img src="resources/Emerald1.png" width="400" /> |
 | <img src="resources/Emerald2.png" width="400" /> | <img src="resources/Emerald3.png" width="400" /> |
 ##### **Rigetti Ankaa-3:**
+_____________
+_Note that the top left corners of each qubit connection graph displays the 'efficiency.' This refers to the number of qubits which are probed in that circuit (0.0 being none, 1.0 being all)._
+_____________
 | | |
 |:---:|:---:|
 | <img src="resources/Ankaa-3_0.png" width="400" /> | <img src="resources/Ankaa-3_1.png" width="400" /> |
@@ -191,41 +197,50 @@ The notebook containing the code to produce these graphs from the AWS Braket on 
 
 #### 2b. Inference 
 
-After gathering data from a circuit applying the same gate to each qubit a set number of times, using the SplitGateFilter class, the gate error can be inferred. The data should be placed into the directory marked by `data_file_address`, with the files named as `Readout_{gate_num}{gate_type}Q{QubitNumber}.csv`.
+After gathering data from a circuit applying the tested gate to each qubit a set number of times, using the SplitGateFilter class, the gate error can be efficiently inferred. The data should be placed into the directory marked by the `data_file_address` parameter, with the files named as `Readout_{gate_num}{gate_type}Q{QubitNumber}.csv`.
 
 ```python
 from src.splitgatefilter import SplitGateFilter
 
-# 1. Setup
-gate_path = './data/gate_exp/'
-# "meas_path" must match the folder used in Step 1
 
-# 2. Instantiate
-# Note: data_file_address is often used for both I/O in the current script. 
-# Ensure raw gate data (Readout_) is inside 'gate_path'.
-gate_filter = SplitGateFilter(interested_qubits=[0],
-                              gate_num=100,
-                              gate_type='X',
-                              work_dir='./results',
-                              data_file_address=gate_path,
-                              meas_cal_dir=meas_path)
-
+# Instantiate our filter class
+# Note: data_file_address is used for both I/O in the current script. 
+# Ensure raw gate bitstring data gathered from the AWS Braket 
+# in the same method as above in Section 1. is contained as a .csv inside 'gate_path'.
+# It is recommended to directly provide the name here to ensure file access safety.
+my_gate_filter = SplitGateFilter(home_dir='./',meas_cal_dir='./meas_cal/',data_file_address='./2-qubit-data/')
 ```
 
-Note the three folders. `work_dir` is the folder where the final results are placed, all plots, all posterior distribution arrays, etc. `data_file_address` contains all the measured gate data, and `meas_cal_dir` contains the calibrated informative priors.
+Note the three folders. `home_dir` is the project directory, it is optional to declare. `data_file_address` contains all the measured gate data, and will then contain the folder produced by `SplitGateFilter` where the final results are placed, all plots, all posterior distribution arrays, etc. `meas_cal_dir` contains the calibrated informative priors from the `SplitMeasFilter` class performed prior to this calculation.
 
+It is _highly_ recommended to run the `SplitMeasFilter` script before the `SplitGateFilter` script, to ensure accurate measurement error priors, as these can often be the dominant error channel for quantum hardware, and should be accurately modelled to infer other error rates.
 
-To run inference based on the informed measurement error posteriors, we run the following
-
+We first will run, for example, 40 pi/2 X rotation gates which we have already applied to every qubit on a certain QPU device and gathered into a file named `READOUT_40_X_EXAMPLE.csv`.
 ```python
-gate_filter.inference(nPrior=40000, 
-                        meas_sd=0.1,
-                        gate_sd=0.01,
-                        seed=127,
-                        shots_per_point=1024,
-                        use_informed_priors=True,
-                        plotting=True)
+# Loading in the order of qubit measurement:
+qubit_order = np.loadtxt('./2-qubit-data/READOUT_40_X_EXAMPLE_MEASURED_QUBITS.csv', delimiter=',')
 
+# Define gate type being measured
+gate_type = 'X'
+
+# Define number of gates applied to each qubit
+gate_num = 40
+
+# Define the file name of our data under `interested_circuits`
+interested_circuit = ['READOUT_40_X_EXAMPLE_MEASURED_QUBITS.csv']
+
+my_gate_filter.inference(qubit_orders=[qubit_order],
+                         gate_type=gate_type,
+                         gate_num=gate_num,
+                         interested_circuits=interested_circuits,
+                         # qubit_couplings=[], 
+                         # ^Left empty, only used for 2-qubit inference
+                         nPrior = 40000,
+                         meas_sd=0.05,
+                         gate_sd=0.01,
+                         seed=54,
+                         use_informed_priors=True,
+                         plotting=True)
 ```
 
 Produces `State0_Post_Qubit0.csv` etc. Also produces with the variables:
@@ -234,29 +249,12 @@ Produces `State0_Post_Qubit0.csv` etc. Also produces with the variables:
 
 To output the fidelity of qubit, both towards and from the ground state, along with the gate error, return `gate_filter.mean()['Qubit0']` or similar for any number Qubit.
 
-### Plotting
+<!-- ### Plotting
+
+To plot the data generated, there is an in-built function in the class called ....
 
 ```python
-import matplotlib.pyplot as plt
-import scipy.stats as ss
-
-# Access the Gate Error Column (Index 2)
-gate_errors = gate_filter.post['Qubit0'][:, 2]
-
-# Create KDE
-kde = ss.gaussian_kde(gate_errors)
-x_axis = np.linspace(min(gate_errors), max(gate_errors), 200)
-
-# Plot
-plt.figure(figsize=(8, 5))
-plt.plot(x_axis, kde(x_axis), color='purple', label='Posterior Gate Error')
-plt.fill_between(x_axis, kde(x_axis), color='purple', alpha=0.2)
-plt.title("Characterized Gate Error (With Informed Measurement Priors)")
-plt.xlabel("Gate Error Rate")
-plt.ylabel("Density")
-plt.legend()
-plt.show()
-```
+``` -->
 
 ### Denoising
 
