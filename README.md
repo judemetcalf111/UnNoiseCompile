@@ -9,7 +9,7 @@ Much of this repository is built on proper management of experimental data gathe
 Project_Root/
 │
 │
-├── setup.py                   <-- setup.py describing the version, dependencies, etc.
+├── pyproject.toml             <-- describing the version, dependencies, etc.
 │
 │
 ├── notebooks/
@@ -127,7 +127,7 @@ Alongside the data, the posterior distributions will be saved as plots in the sa
 
 For example, here is a plot that may have been produced by the above script:
 
-<img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/ErrorDist_Qubit1.png" width="900" />
+<img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/ErrorDist_Qubit1.png?token=GHSAT0AAAAAADUYNQUBTEZH6JELCF5INHMC2MDFNXQ" width="900" />
 
 which contain the posterior distributions of measurement errors, in the form of rejection-sampled error rates. To reproduce these plots, along with printing a full description of all distribution statistics, and optionally save, run:
 
@@ -178,20 +178,20 @@ _Note that the top left corners of each qubit connection graph displays the 'eff
 _____________
 | | |
 |:---:|:---:|
-| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Emerald0.png" width="400" /> | <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Emerald1.png" width="400" /> |
-| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Emerald2.png" width="400" /> | <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Emerald3.png" width="400" /> |
+| <img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/Emerald0.png?token=GHSAT0AAAAAADUYNQUANUHGHJBKFOPF6DB62MDFOHQ" width="400" /> | <img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/Emerald1.png?token=GHSAT0AAAAAADUYNQUAOVWL3YDSBP2GDIGK2MDFONA" width="400" /> |
+| <img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/Emerald2.png?token=GHSAT0AAAAAADUYNQUBIQTR3H2UK6AJPCNS2MDFONQ" width="400" /> | <img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/Emerald3.png?token=GHSAT0AAAAAADUYNQUBKHG3ZN7K5SE6ZK7C2MDFPUQ" width="400" /> |
 ##### **Rigetti Ankaa-3:**
 _____________
 _Note that the top left corners of each qubit connection graph displays the 'efficiency.' This refers to the number of qubits which are probed in that circuit (0.0 being none, 1.0 being all)._
 _____________
 | | |
 |:---:|:---:|
-| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3_0.png" width="400" /> | <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3_1.png" width="400" /> |
-| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3_2.png" width="400" /> | <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3_3.png" width="400" /> |
+| <img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/Ankaa-3_0.png?token=GHSAT0AAAAAADUYNQUAWJIFQQ5EN7GGZMBY2MDFQGA" width="400" /> | <img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/Ankaa-3_1.png?token=GHSAT0AAAAAADUYNQUAQBAW7A2GI4AWBD5K2MDFQGQ" width="400" /> |
+| <img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/Ankaa-3_2.png?token=GHSAT0AAAAAADUYNQUATKSICOVH6K3DB5Z22MDFQGQ" width="400" /> | <img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/Ankaa-3_3.png?token=GHSAT0AAAAAADUYNQUBBXFUAYVGXEWKXTKY2MDFQGQ" width="400" /> |
 ##### **Rigetti Ankaa-3 Text Statistics Readout:**
 | |
 |:---:|
-| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3Text.png" width="400" /> |
+| <img src="https://raw.githubusercontent.com/judemetcalf111/UnNoiseCompile/main/resources/Ankaa-3Text.png?token=GHSAT0AAAAAADUYNQUAGNRGIYHX4K6CPSJA2MDFQ7A" width="400" /> |
 
 The notebook containing the code to produce these graphs from the AWS Braket on 7 Jan 2026 can be found in `Tutorial/Producing2QubitGraphs.ipynb`
 
