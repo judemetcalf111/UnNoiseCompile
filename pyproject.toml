@@ -1,6 +1,6 @@
 [project]
 name = "unnoise-compile"
-version = "0.1.0"
+version = "0.1.2"
 description = "A package for developing scalable and hardware-aware quantum error inference and compilation to minimise bitflip gate and measurement error."
 authors = [
     {name = "Jude Metcalf",email = "209973512+judemetcalf111@users.noreply.github.com"}
