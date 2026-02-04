@@ -127,7 +127,7 @@ Alongside the data, the posterior distributions will be saved as plots in the sa
 
 For example, here is a plot that may have been produced by the above script:
 
-<img src="resources/ErrorDist_Qubit1.png" width="600" />
+<img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/ErrorDist_Qubit1.png" width="900" />
 
 which contain the posterior distributions of measurement errors, in the form of rejection-sampled error rates. To reproduce these plots, along with printing a full description of all distribution statistics, and optionally save, run:
 
@@ -178,20 +178,20 @@ _Note that the top left corners of each qubit connection graph displays the 'eff
 _____________
 | | |
 |:---:|:---:|
-| <img src="resources/Emerald0.png" width="400" /> | <img src="resources/Emerald1.png" width="400" /> |
-| <img src="resources/Emerald2.png" width="400" /> | <img src="resources/Emerald3.png" width="400" /> |
+| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Emerald0.png" width="400" /> | <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Emerald1.png" width="400" /> |
+| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Emerald2.png" width="400" /> | <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Emerald3.png" width="400" /> |
 ##### **Rigetti Ankaa-3:**
 _____________
 _Note that the top left corners of each qubit connection graph displays the 'efficiency.' This refers to the number of qubits which are probed in that circuit (0.0 being none, 1.0 being all)._
 _____________
 | | |
 |:---:|:---:|
-| <img src="resources/Ankaa-3_0.png" width="400" /> | <img src="resources/Ankaa-3_1.png" width="400" /> |
-| <img src="resources/Ankaa-3_2.png" width="400" /> | <img src="resources/Ankaa-3_3.png" width="400" /> |
+| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3_0.png" width="400" /> | <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3_1.png" width="400" /> |
+| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3_2.png" width="400" /> | <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3_3.png" width="400" /> |
 ##### **Rigetti Ankaa-3 Text Statistics Readout:**
 | |
 |:---:|
-| <img src="resources/Ankaa-3Text.png" width="400" /> |
+| <img src="https://github.com/judemetcalf111/UnNoiseCompile/raw/main/resources/Ankaa-3Text.png" width="400" /> |
 
 The notebook containing the code to produce these graphs from the AWS Braket on 7 Jan 2026 can be found in `Tutorial/Producing2QubitGraphs.ipynb`
 
