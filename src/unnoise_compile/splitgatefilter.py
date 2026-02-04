@@ -589,6 +589,8 @@ class SplitGateFilter:
                 # --- Gate Error {Column (2)} ---
                 # We always generate this using the calibration data as an uncertain prior
                 # Retrieve calibration center (i.e. mean) using existing data_readout()
+
+                # ADD IN A WAY TO USE PREVIOUS PRIORS!
                 try:
                     datafile = os.path.join(self.meas_cal_dir,'Braket_Qubit_Calibration.json')
                     cal_data = data_readout(q, datafile=datafile)
