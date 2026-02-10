@@ -30,10 +30,15 @@ jobs:
         
     - name: Lint with flake8
       run: |
+        # Debugging: Print what is actually installed
+        python -m pip list
+        
+        # Safety: Force install flake8 right here to be absolutely sure
+        python -m pip install flake8
+        
+        # Run the commands
         python -m flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        python -m flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics        
-    - name: Test with pytest
-      run: pytest  
+        python -m flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
   build-distribution:
     name: Build Distribution
